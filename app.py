@@ -385,16 +385,20 @@ if st.session_state["authenticated"]:
             st.success(f"{labels['exported']}{fn}")
         # Statisztikák
         with st.expander(labels["stats"], expanded=False):
-            st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
-            st.write(labels["top10"])
-            st.dataframe(df["Gyermek(ek) neve"].value_counts().head(10))
-            st.write(labels["horse_usage"])
-            lo_list = (
-                df["Lovak"]
-                .fillna("")
-                .astype(str)
-                .str.split(",")
-                .explode()
-                .str.strip()
-            )
-            st.dataframe(lo_list[lo_list!=""].value_counts())
+            if not week_df.empty and "Dátum" in week_df.columns:
+                st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
+                st.write(labels["top10"])
+                st.dataframe(df["Gyermek(ek) neve"].value_counts().head(10))
+                st.write(labels["horse_usage"])
+                lo_list = (
+                    df["Lovak"]
+                    .fillna("")
+                    .astype(str)
+                    .str.split(",")
+                    .explode()
+                    .str.strip()
+                )
+                st.dataframe(lo_list[lo_list!=""].value_counts())
+            else:
+                st.info("Nincs statisztika ehhez a héthez.")
+
