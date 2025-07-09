@@ -4,7 +4,6 @@ from datetime import datetime, date, time, timedelta
 import os
 import uuid
 
-# Alapbeállítások
 START_TIME = time(9, 0)
 END_TIME   = time(20, 30)
 BREAK_MINUTES = 10
@@ -18,7 +17,6 @@ ADMIN_PASSWORD = "almakaki"
 
 st.set_page_config(page_title="Lovarda Foglalás", layout="centered")
 
-# --- Admin autentikáció ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -42,7 +40,6 @@ else:
 
 st.title("🐴 Lovarda Időpontfoglaló")
 
-# --- Dátumválasztó és korlátozások ---
 selected_date = st.date_input("📅 Válaszd ki a napot")
 weekday = selected_date.weekday()
 month   = selected_date.month
@@ -60,7 +57,6 @@ if invalid and not st.session_state["authenticated"]:
     st.warning(msg)
     st.stop()
 
-# --- Foglalások betöltése ---
 if os.path.exists(FILE_NAME):
     df = pd.read_excel(FILE_NAME)
 else:
@@ -72,9 +68,7 @@ else:
 if "RepeatGroupID" not in df.columns:
     df["RepeatGroupID"] = ""
 
-# --- Segédfüggvények ---
 def slot_overlapping(start_time, end_time, on_date, bookings_df):
-    # Átalakítás datetime.datetime-é
     if isinstance(start_time, time):
         start_dt = datetime.combine(on_date, start_time)
     else:
@@ -83,7 +77,6 @@ def slot_overlapping(start_time, end_time, on_date, bookings_df):
         end_dt = datetime.combine(on_date, end_time)
     else:
         end_dt = end_time
-
     for _, row in bookings_df.iterrows():
         b_start = datetime.combine(
             on_date,
@@ -119,7 +112,6 @@ def get_free_slots_exclusive(duration, on_date, bookings_df):
 
     return slots
 
-# --- Vendég-felület ---
 if not st.session_state["authenticated"]:
     st.subheader("➕ Foglalás")
     with st.form("foglalas_form"):
@@ -170,47 +162,36 @@ if not st.session_state["authenticated"]:
     else:
         st.info("Nincs szabad időpont ma.")
 
-# --- Admin-felület ---
 if st.session_state["authenticated"]:
-    # innen konvertáljuk dátummá
     df["Dátum"] = pd.to_datetime(df["Dátum"])
     df["Hét"]   = df["Dátum"].dt.isocalendar().week
 
-    # Év, amire a heti tartományokat számoljuk
     YEAR = selected_date.year
-
-    # Összes ISO-hét lista
     weeks = sorted(df["Hét"].unique())
-
-    # Minden héthez kiszámoljuk a kedd és vasárnap dátumát, meg a hónap nevét
     week_ranges = []
     for w in weeks:
-        # kedd (ISO-nap 2) és vasárnap (7)
         tue = date.fromisocalendar(YEAR, w, 2)
         sun = date.fromisocalendar(YEAR, w, 7)
         month_name = tue.strftime("%B")
         label = (
-            f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')}"
-            f" ({month_name})"
+            f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
         )
         week_ranges.append((w, label))
 
-    # A selectbox-on csak a címkék szerepelnek
     labels = [lbl for _, lbl in week_ranges]
-    sel_idx = st.selectbox(
+    sel_label = st.selectbox(
         "🔍 Válassz hetet (kedd–vasárnap)", labels,
         index=len(labels)-1 if labels else 0
     )
-    sel_week = week_ranges[sel_idx][0]
+    sel_week = [w for w, lbl in week_ranges if lbl == sel_label][0]
 
-    # Szűrt és időrendbe rakott DataFrame
     week_df = (
         df[df["Hét"] == sel_week]
         .sort_values(by=["Dátum", "Kezdés"])
         .reset_index(drop=True)
     )
 
-    st.write(f"Foglalások: {labels[sel_idx]}")
+    st.write(f"Foglalások: {sel_label}")
     for idx, row in week_df.iterrows():
         d = row["Dátum"].strftime("%Y-%m-%d")
         st.markdown(
@@ -222,6 +203,7 @@ if st.session_state["authenticated"]:
 
         with c1:
             if st.button("❌ Törlés", key=f"del_{idx}"):
+
                 df = df.drop(idx)
                 df.to_excel(FILE_NAME, index=False)
                 st.success("Törölve!")
@@ -252,7 +234,6 @@ if st.session_state["authenticated"]:
                 st.success("Átcsúsztatva admin joggal!")
                 st.rerun()
 
-    # Lovak hozzárendelése
     if "mod" in st.session_state:
         m   = st.session_state["mod"]
         row = df.loc[m]
@@ -266,13 +247,11 @@ if st.session_state["authenticated"]:
             st.success("Lovak mentve!")
             st.rerun()
 
-    # Excel export
     if st.button("📁 Exportálás Excel-be"):
-        fn = f"foglalasok_{labels[sel_idx].split()[0]}.xlsx"
+        fn = f"foglalasok_{sel_label.split()[0]}.xlsx"
         week_df.to_excel(fn, index=False)
         st.success(f"Exportálva: {fn}")
 
-    # Statisztikák
     with st.expander("📊 Statisztikák", expanded=False):
         st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
         st.write("**Top 10 név:**")
