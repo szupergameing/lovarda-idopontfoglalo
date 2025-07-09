@@ -239,6 +239,7 @@ if not st.session_state["authenticated"]:
     with st.form("foglalas_form"):
         nev     = st.text_input(labels["name"])
         letszam = st.number_input(labels["count"], 1, MAX_CHILDREN_PER_SLOT, 1)
+        # --- Dinamikusan frissülő foglalható időpont opciók ---
         v       = st.selectbox(labels["slot"], opts if opts else ["Nincs időpont"], key="ido_opcio_guest")
         ism     = st.checkbox(labels["repeat"])
         if st.form_submit_button(labels["save"]) and v != "Nincs időpont":
@@ -270,6 +271,7 @@ if not st.session_state["authenticated"]:
                 df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
                 df.to_excel(FILE_NAME, index=False)
                 st.success(labels["saved"])
+                st.rerun()
     st.subheader(labels["available_slots"])
     if szlots:
         for s in szlots:
@@ -278,7 +280,6 @@ if not st.session_state["authenticated"]:
         st.info(labels["no_slots"])
     # ICS export
     if ICS_OK and st.button(labels["ics_dl"]):
-        # Utolsó foglalás ICS letöltése
         utolso = df.iloc[-1]
         cal = generate_ics_for_booking(utolso, lang)
         if cal:
@@ -293,101 +294,107 @@ if not st.session_state["authenticated"]:
 
 # ---- Admin-felület ----
 if st.session_state["authenticated"]:
+    st.subheader(labels["admin_panel"])
     df["Dátum"] = pd.to_datetime(df["Dátum"])
-    df["Hét"]   = df["Dátum"].dt.isocalendar().week
-    YEAR = selected_date.year
+    df["Hét"] = df["Dátum"].dt.isocalendar().week
+
+    year = selected_date.year
     weeks = sorted(df["Hét"].unique())
     week_ranges = []
     for w in weeks:
         try:
-            tue = date.fromisocalendar(YEAR, w, 2)
-            sun = date.fromisocalendar(YEAR, w, 7)
+            tue = date.fromisocalendar(year, w, 2)
+            sun = date.fromisocalendar(year, w, 7)
+            month_name = tue.strftime("%B")
+            label = f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
+            week_ranges.append((w, label))
         except Exception:
-            tue = sun = selected_date
-        month_name = tue.strftime("%B")
-        label = (
-            f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
-        )
-        week_ranges.append((w, label))
-    labels_weeks = [lbl for _, lbl in week_ranges]
-    if labels_weeks:
-        sel_label = st.selectbox(labels["select_week"], labels_weeks, index=len(labels_weeks)-1)
-        found = [w for w, lbl in week_ranges if lbl == sel_label]
-        sel_week = found[0] if found else weeks[-1]
+            continue
+    if not week_ranges:
+        st.info("Nincs foglalás, ezért nincs heti nézet.")
+        sel_week = None
+        week_df = pd.DataFrame()
+        week_labels = []
+        sel_label = None
     else:
-        sel_week = weeks[-1] if weeks else None
-        sel_label = ""
-    week_df = (
-        df[df["Hét"] == sel_week]
-        .sort_values(by=["Dátum", "Kezdés"])
-        .reset_index(drop=True)
-    ) if sel_week else pd.DataFrame()
-    st.subheader(labels["admin_panel"])
-    st.write(f"Foglalások: {sel_label}")
-    for idx, row in week_df.iterrows():
-        d = row["Dátum"].strftime("%Y-%m-%d")
-        st.markdown(
-            f"**{d} {row['Kezdés']}** – {row['Gyermek(ek) neve']} – "
-            f"{row['Időtartam (perc)']}p – {row['Fő']} fő – "
-            f"Lovak: {row['Lovak'] or 'nincs'}"
+        week_labels = [lbl for _, lbl in week_ranges]
+        sel_label = st.selectbox(labels["select_week"], week_labels, index=len(week_labels)-1)
+        week_idx_list = [w for w, lbl in week_ranges if lbl == sel_label]
+        sel_week = week_idx_list[0] if week_idx_list else weeks[0]
+        week_df = (
+            df[df["Hét"] == sel_week]
+            .sort_values(by=["Dátum", "Kezdés"])
+            .reset_index(drop=True)
         )
-        c1, c2, c3 = st.columns([1,1,2])
-        with c1:
-            if st.button(labels["delete"], key=f"del_{idx}"):
-                df = df.drop(idx)
-                df.to_excel(FILE_NAME, index=False)
-                st.success(labels["deleted"])
-                st.rerun()
-        with c2:
-            if st.button(labels["horses"], key=f"lo_{idx}"):
-                st.session_state["mod"] = idx
-        with c3:
-            duration = int(row["Időtartam (perc)"])
-            times = []
-            t = datetime.combine(row["Dátum"].date(), START_TIME)
-            end_of_day = datetime.combine(row["Dátum"].date(), END_TIME) - timedelta(minutes=duration)
-            while t <= end_of_day:
-                times.append(t.time())
-                t += timedelta(minutes=5)
-            opts2 = [tt.strftime("%H:%M") for tt in times]
-            current_index = opts2.index(row["Kezdés"]) if row["Kezdés"] in opts2 else 0
-            new_start = st.selectbox(
-                labels["slot"], opts2, index=current_index,
-                key=f"cs_select_{idx}"
+
+    if not week_ranges or week_df.empty:
+        st.warning("Nincs foglalás ezen a héten.")
+    else:
+        st.write(f"Foglalások: {sel_label}")
+        for idx, row in week_df.iterrows():
+            d = row["Dátum"].strftime("%Y-%m-%d")
+            st.markdown(
+                f"**{d} {row['Kezdés']}** – {row['Gyermek(ek) neve']} – "
+                f"{row['Időtartam (perc)']}p – {row['Fő']} fő – "
+                f"Lovak: {row['Lovak'] or 'nincs'}"
             )
-            if st.button(labels["move"], key=f"cs_button_{idx}"):
-                df.at[idx, "Kezdés"] = new_start
+            c1, c2, c3 = st.columns([1,1,2])
+            with c1:
+                if st.button(labels["delete"], key=f"del_{idx}"):
+                    df = df.drop(idx)
+                    df.to_excel(FILE_NAME, index=False)
+                    st.success(labels["deleted"])
+                    st.rerun()
+            with c2:
+                if st.button(labels["horses"], key=f"lo_{idx}"):
+                    st.session_state["mod"] = idx
+            with c3:
+                duration = int(row["Időtartam (perc)"])
+                times = []
+                t = datetime.combine(row["Dátum"].date(), START_TIME)
+                end_of_day = datetime.combine(row["Dátum"].date(), END_TIME) - timedelta(minutes=duration)
+                while t <= end_of_day:
+                    times.append(t.time())
+                    t += timedelta(minutes=5)
+                opts2 = [tt.strftime("%H:%M") for tt in times]
+                current_index = opts2.index(row["Kezdés"]) if row["Kezdés"] in opts2 else 0
+                new_start = st.selectbox(labels["move"], opts2, index=current_index, key=f"cs_select_{idx}")
+                if st.button(labels["move"], key=f"cs_button_{idx}"):
+                    df.at[idx, "Kezdés"] = new_start
+                    df.to_excel(FILE_NAME, index=False)
+                    st.success(labels["move_done"])
+                    st.rerun()
+
+        # Lovak hozzárendelése
+        if "mod" in st.session_state:
+            m   = st.session_state["mod"]
+            row = df.loc[m]
+            st.info(f"{row['Dátum'].strftime('%Y-%m-%d')} {row['Kezdés']} – {row['Gyermek(ek) neve']}")
+            cur = [h for h in str(row["Lovak"]).split(",") if h.strip() in HORSES]
+            nh  = st.multiselect("Lovak", HORSES, default=cur)
+            if st.button(labels["save"], key="mentlov"):
+                df.at[m, "Lovak"] = ", ".join(nh)
                 df.to_excel(FILE_NAME, index=False)
-                st.success(labels["move_done"])
+                del st.session_state["mod"]
+                st.success(labels["lovak_saved"])
                 st.rerun()
-    # Lovak hozzárendelése
-    if "mod" in st.session_state:
-        m   = st.session_state["mod"]
-        row = df.loc[m]
-        st.info(f"{row['Dátum'].strftime('%Y-%m-%d')} {row['Kezdés']} – {row['Gyermek(ek) neve']}")
-        cur = [h for h in str(row["Lovak"]).split(",") if h.strip() in HORSES]
-        nh  = st.multiselect("Lovak", HORSES, default=cur)
-        if st.button(labels["save"], key="mentlov"):
-            df.at[m, "Lovak"] = ", ".join(nh)
-            df.to_excel(FILE_NAME, index=False)
-            del st.session_state["mod"]
-            st.success(labels["lovak_saved"])
-            st.rerun()
-    if st.button(labels["export"]):
-        fn = f"foglalasok_{sel_label.split()[0]}.xlsx"
-        week_df.to_excel(fn, index=False)
-        st.success(f"{labels['exported']}{fn}")
-    with st.expander(labels["stats"], expanded=False):
-        st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
-        st.write(labels["top10"])
-        st.dataframe(df["Gyermek(ek) neve"].value_counts().head(10))
-        st.write(labels["horse_usage"])
-        lo_list = (
-            df["Lovak"]
-            .fillna("")
-            .astype(str)
-            .str.split(",")
-            .explode()
-            .str.strip()
-        )
-        st.dataframe(lo_list[lo_list!=""].value_counts())
+        # Export
+        if st.button(labels["export"]):
+            fn = f"foglalasok_{sel_label.split()[0]}.xlsx"
+            week_df.to_excel(fn, index=False)
+            st.success(f"{labels['exported']}{fn}")
+        # Statisztikák
+        with st.expander(labels["stats"], expanded=False):
+            st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
+            st.write(labels["top10"])
+            st.dataframe(df["Gyermek(ek) neve"].value_counts().head(10))
+            st.write(labels["horse_usage"])
+            lo_list = (
+                df["Lovak"]
+                .fillna("")
+                .astype(str)
+                .str.split(",")
+                .explode()
+                .str.strip()
+            )
+            st.dataframe(lo_list[lo_list!=""].value_counts())
