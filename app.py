@@ -170,20 +170,31 @@ if st.session_state["authenticated"]:
     weeks = sorted(df["Hét"].unique())
     week_ranges = []
     for w in weeks:
-        tue = date.fromisocalendar(YEAR, w, 2)
-        sun = date.fromisocalendar(YEAR, w, 7)
-        month_name = tue.strftime("%B")
-        label = (
-            f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
-        )
-        week_ranges.append((w, label))
+        try:
+            tue = date.fromisocalendar(YEAR, w, 2)
+            sun = date.fromisocalendar(YEAR, w, 7)
+            month_name = tue.strftime("%B")
+            label = (
+                f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
+            )
+            week_ranges.append((w, label))
+        except Exception:
+            pass
 
     labels = [lbl for _, lbl in week_ranges]
     sel_label = st.selectbox(
         "🔍 Válassz hetet (kedd–vasárnap)", labels,
         index=len(labels)-1 if labels else 0
     )
-    sel_week = [w for w, lbl in week_ranges if lbl == sel_label][0]
+    # Biztonságosan keresd vissza a hét sorszámát!
+    sel_week = None
+    for w, lbl in week_ranges:
+        if lbl == sel_label:
+            sel_week = w
+            break
+    if sel_week is None:
+        st.warning("Nem sikerült hetet választani!")
+        st.stop()
 
     week_df = (
         df[df["Hét"] == sel_week]
@@ -203,7 +214,6 @@ if st.session_state["authenticated"]:
 
         with c1:
             if st.button("❌ Törlés", key=f"del_{idx}"):
-
                 df = df.drop(idx)
                 df.to_excel(FILE_NAME, index=False)
                 st.success("Törölve!")
