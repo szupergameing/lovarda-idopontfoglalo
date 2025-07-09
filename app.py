@@ -4,6 +4,68 @@ from datetime import datetime, date, time, timedelta
 import os
 import uuid
 
+# --- Nemzetközi szótár ---
+LANGS = {
+    "hu": {
+        "lang": "🇭🇺 Magyar",
+        "delete": "❌ Törlés",
+        "edit_horses": "🐴 Lovak",
+        "save_horses": "Lovak mentése",
+        "shift": "Csúsztat",
+        "shifted": "Átcsúsztatva!",
+        "horses_saved": "Lovak mentve!",
+        "dragdrop_title": "🕑 Drag & Drop idővonal (demo)",
+        "help": "Foglalásokat *drag & drop* módon szerkeszteni csak bővítménnyel lehet (pl. [streamlit-timeline](https://github.com/tylerjrichards/streamlit-timeline)) – itt most csak szemléltető listát látsz.",
+        "export": "📁 Exportálás Excel-be",
+        "exported": "Exportálva:",
+        "stats": "📊 Statisztikák",
+        "top10": "**Top 10 név:**",
+        "horse_usage": "**Lovak kihasználtsága:**",
+        "ics_dl": "ICS naptár export",
+        "ics_ready": "ICS naptár letöltés kész!",
+        "theme": "🌙 Dark mód",
+        "select_lang": "Nyelv: ",
+    },
+    "en": {
+        "lang": "🇬🇧 English",
+        "delete": "❌ Delete",
+        "edit_horses": "🐴 Horses",
+        "save_horses": "Save horses",
+        "shift": "Shift",
+        "shifted": "Shifted!",
+        "horses_saved": "Horses saved!",
+        "dragdrop_title": "🕑 Drag & Drop timeline (demo)",
+        "help": "*Drag & drop* editing only with plugins (see [streamlit-timeline](https://github.com/tylerjrichards/streamlit-timeline)). This is a static preview.",
+        "export": "📁 Export to Excel",
+        "exported": "Exported:",
+        "stats": "📊 Statistics",
+        "top10": "**Top 10 names:**",
+        "horse_usage": "**Horse utilization:**",
+        "ics_dl": "ICS calendar export",
+        "ics_ready": "ICS download ready!",
+        "theme": "🌙 Dark mode",
+        "select_lang": "Language: ",
+    }
+}
+
+def _(txt):
+    lang = st.session_state.get("lang", "hu")
+    return LANGS[lang].get(txt, txt)
+
+# --- Nyelvválasztó + dark mód kapcsoló ---
+st.sidebar.write("---")
+col1, col2 = st.sidebar.columns([1,1])
+if "lang" not in st.session_state:
+    st.session_state["lang"] = "hu"
+with col1:
+    st.session_state["lang"] = st.selectbox(
+        _( "select_lang"), [k for k in LANGS], format_func=lambda k: LANGS[k]["lang"], key="LANG")
+with col2:
+    dark = st.checkbox(_( "theme"), value=False)
+    if dark:
+        st.markdown("""<style>body, .stApp {background:#17191c;color:#eee;} .stButton>button{background:#444;color:#fff;}</style>""", unsafe_allow_html=True)
+
+# --- Alapbeállítások ---
 START_TIME = time(9, 0)
 END_TIME   = time(20, 30)
 BREAK_MINUTES = 10
@@ -112,18 +174,30 @@ def get_free_slots_exclusive(duration, on_date, bookings_df):
 
     return slots
 
+# --- Vendég-felület ---
 if not st.session_state["authenticated"]:
     st.subheader("➕ Foglalás")
+
+    # Élő foglalható időpontok a kiválasztott időtartamhoz
+    ido = st.selectbox("Időtartam", [30, 60, 90], key="foglalas_idotartam")
+    szlots  = get_free_slots_exclusive(ido, selected_date, df)
+    st.markdown("**Elérhető időpontok:**")
+    if szlots:
+        st.info(", ".join([
+            f"{s[0].strftime('%H:%M')}-{s[1].strftime('%H:%M')} ({s[2]}p)"
+            for s in szlots
+        ]))
+    else:
+        st.warning("Nincs szabad időpont ma ezzel az időtartammal.")
+
     with st.form("foglalas_form"):
         nev     = st.text_input("Gyermek(ek) neve")
         letszam = st.number_input("Fő", 1, MAX_CHILDREN_PER_SLOT, 1)
-        ido     = st.selectbox("Időtartam", [30, 60, 90])
-        szlots  = get_free_slots_exclusive(ido, selected_date, df)
         opts    = [
             f"{s[0].strftime('%H:%M')}-{s[1].strftime('%H:%M')} ({s[2]}p)"
             for s in szlots
         ]
-        v       = st.selectbox("Időpont", opts if opts else ["Nincs időpont"])
+        v       = st.selectbox("Időpont", opts if opts else ["Nincs időpont"], key="ido_opts")
         ism     = st.checkbox("Heti ismétlődés aug.")
         if st.form_submit_button("Mentés") and v != "Nincs időpont":
             idx = opts.index(v)
@@ -155,13 +229,29 @@ if not st.session_state["authenticated"]:
                 df.to_excel(FILE_NAME, index=False)
                 st.success("Foglalás elmentve!")
 
-    st.subheader("📆 Elérhető időpontok")
-    if szlots:
-        for s in szlots:
-            st.write(f"{s[0].strftime('%H:%M')} – {s[1].strftime('%H:%M')} ({s[2]}p)")
-    else:
-        st.info("Nincs szabad időpont ma.")
+    # ICS letöltés generálása (ics string)
+    def make_ics(df, for_date):
+        from ics import Calendar, Event
+        c = Calendar()
+        for _, row in df[df["Dátum"]==for_date.strftime("%Y-%m-%d")].iterrows():
+            e = Event()
+            stime = datetime.combine(for_date, datetime.strptime(row["Kezdés"], "%H:%M").time())
+            e.name = row["Gyermek(ek) neve"]
+            e.begin = stime
+            e.duration = {"minutes": int(row["Időtartam (perc)"])}
+            e.description = f"Ló: {row['Lovak']}"
+            c.events.add(e)
+        return str(c)
+    if st.button(_( "ics_dl")):
+        try:
+            import ics
+            ics_txt = make_ics(df, selected_date)
+            st.download_button("Letöltés .ics", ics_txt, file_name=f"lovarda_{selected_date}.ics")
+            st.success(_( "ics_ready"))
+        except ImportError:
+            st.error("Az ics csomagot pip install ics -el tedd fel!")
 
+# --- Admin-felület ---
 if st.session_state["authenticated"]:
     df["Dátum"] = pd.to_datetime(df["Dátum"])
     df["Hét"]   = df["Dátum"].dt.isocalendar().week
@@ -170,31 +260,20 @@ if st.session_state["authenticated"]:
     weeks = sorted(df["Hét"].unique())
     week_ranges = []
     for w in weeks:
-        try:
-            tue = date.fromisocalendar(YEAR, w, 2)
-            sun = date.fromisocalendar(YEAR, w, 7)
-            month_name = tue.strftime("%B")
-            label = (
-                f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
-            )
-            week_ranges.append((w, label))
-        except Exception:
-            pass
+        tue = date.fromisocalendar(YEAR, w, 2)
+        sun = date.fromisocalendar(YEAR, w, 7)
+        month_name = tue.strftime("%B")
+        label = (
+            f"{tue.strftime('%Y.%m.%d')} – {sun.strftime('%Y.%m.%d')} ({month_name})"
+        )
+        week_ranges.append((w, label))
 
     labels = [lbl for _, lbl in week_ranges]
     sel_label = st.selectbox(
         "🔍 Válassz hetet (kedd–vasárnap)", labels,
         index=len(labels)-1 if labels else 0
     )
-    # Biztonságosan keresd vissza a hét sorszámát!
-    sel_week = None
-    for w, lbl in week_ranges:
-        if lbl == sel_label:
-            sel_week = w
-            break
-    if sel_week is None:
-        st.warning("Nem sikerült hetet választani!")
-        st.stop()
+    sel_week = [w for w, lbl in week_ranges if lbl == sel_label][0]
 
     week_df = (
         df[df["Hét"] == sel_week]
@@ -211,18 +290,15 @@ if st.session_state["authenticated"]:
             f"Lovak: {row['Lovak'] or 'nincs'}"
         )
         c1, c2, c3 = st.columns([1,1,2])
-
         with c1:
-            if st.button("❌ Törlés", key=f"del_{idx}"):
+            if st.button(_( "delete"), key=f"del_{idx}"):
                 df = df.drop(idx)
                 df.to_excel(FILE_NAME, index=False)
                 st.success("Törölve!")
                 st.rerun()
-
         with c2:
-            if st.button("🐴 Lovak", key=f"lo_{idx}"):
+            if st.button(_( "edit_horses"), key=f"lo_{idx}"):
                 st.session_state["mod"] = idx
-
         with c3:
             duration = int(row["Időtartam (perc)"])
             times = []
@@ -238,35 +314,49 @@ if st.session_state["authenticated"]:
                 "Új kezdés", opts2, index=current_index,
                 key=f"cs_select_{idx}"
             )
-            if st.button("Csúsztat", key=f"cs_button_{idx}"):
+            if st.button(_( "shift"), key=f"cs_button_{idx}"):
                 df.at[idx, "Kezdés"] = new_start
                 df.to_excel(FILE_NAME, index=False)
-                st.success("Átcsúsztatva admin joggal!")
+                st.success(_( "shifted"))
                 st.rerun()
 
+    # --- Lovak hozzárendelése ---
     if "mod" in st.session_state:
         m   = st.session_state["mod"]
         row = df.loc[m]
         st.info(f"{row['Dátum'].strftime('%Y-%m-%d')} {row['Kezdés']} – {row['Gyermek(ek) neve']}")
         cur = [h for h in str(row["Lovak"]).split(",") if h.strip() in HORSES]
-        nh  = st.multiselect("Lovak", HORSES, default=cur)
-        if st.button("Mentés lovak", key="mentlov"):
+        nh  = st.multiselect(_( "edit_horses"), HORSES, default=cur)
+        if st.button(_( "save_horses"), key="mentlov"):
             df.at[m, "Lovak"] = ", ".join(nh)
             df.to_excel(FILE_NAME, index=False)
             del st.session_state["mod"]
-            st.success("Lovak mentve!")
+            st.success(_( "horses_saved"))
             st.rerun()
 
-    if st.button("📁 Exportálás Excel-be"):
+    # --- Idővonalas Drag & Drop Szerkesztés ---
+    with st.expander(_( "dragdrop_title"), expanded=False):
+        st.markdown("**DEMO timeline (drag & drop):** Sorrendbe rendezett foglalások – szerkesztéshez válassz ki egyet a listából fent!")
+        for idx, row in week_df.iterrows():
+            st.progress((idx + 1) / len(week_df))
+            st.write(
+                f"{row['Dátum'].strftime('%a %H:%M')} - {row['Gyermek(ek) neve']} "
+                f"({row['Kezdés']} - {int(row['Időtartam (perc)'])+int(row['Kezdés'][:2])*60} perc)"
+            )
+        st.info(_( "help"))
+
+    # --- Excel export ---
+    if st.button(_( "export")):
         fn = f"foglalasok_{sel_label.split()[0]}.xlsx"
         week_df.to_excel(fn, index=False)
-        st.success(f"Exportálva: {fn}")
+        st.success(f"{_( 'exported')} {fn}")
 
-    with st.expander("📊 Statisztikák", expanded=False):
+    # --- Statisztikák ---
+    with st.expander(_( "stats"), expanded=False):
         st.bar_chart(week_df.groupby("Dátum")["Fő"].sum())
-        st.write("**Top 10 név:**")
+        st.write(_( "top10"))
         st.dataframe(df["Gyermek(ek) neve"].value_counts().head(10))
-        st.write("**Lovak kihasználtsága:**")
+        st.write(_( "horse_usage"))
         lo_list = (
             df["Lovak"]
             .fillna("")
