@@ -17,8 +17,7 @@ def get_users_df():
     sh = get_gsheet()
     ws = sh.worksheet('Felhasznalok')
     df = get_as_dataframe(ws, evaluate_formulas=True)
-    df = df.dropna(how="all")
-    df = df.fillna("")
+    df = df.dropna(how="all").fillna("")
     return df, ws
 
 def save_users_df(df, ws):
@@ -26,17 +25,18 @@ def save_users_df(df, ws):
 
 def get_foglalasok_df():
     sh = get_gsheet()
-    ws = sh.worksheet('Munkalap1')
+    ws = sh.worksheet('Foglalások')
     df = get_as_dataframe(ws, evaluate_formulas=True)
-    df = df.dropna(how="all")
-    df = df.fillna("")
+    df = df.dropna(how="all").fillna("")
     return df, ws
 
 def save_foglalasok_df(df, ws):
     set_with_dataframe(ws, df, include_index=False)
 
+# ---- Egyszerű admin jelszó ----
 ADMIN_PW = "almakaki"
 
+# ---- Streamlit session state setup ----
 if "user_mode" not in st.session_state:
     st.session_state.user_mode = None
 if "user" not in st.session_state:
@@ -44,6 +44,7 @@ if "user" not in st.session_state:
 
 st.title("🐴 Lovarda Időpontfoglaló")
 
+# ---- Módválasztás ----
 if st.session_state.user_mode is None:
     col1, col2 = st.columns(2)
     with col1:
@@ -54,7 +55,7 @@ if st.session_state.user_mode is None:
             st.session_state.user_mode = "admin"
     st.stop()
 
-# ---- ADMIN LOGIN ----
+# ---- Admin belépés ----
 if st.session_state.user_mode == "admin":
     st.subheader("Admin belépés")
     admin_pw = st.text_input("Admin jelszó", type="password")
@@ -67,7 +68,7 @@ if st.session_state.user_mode == "admin":
     if st.session_state.user != "admin":
         st.stop()
 
-# ---- USER LOGIN/REG ----
+# ---- Felhasználó bejelentkezés/regisztráció ----
 if st.session_state.user_mode == "user" and not st.session_state.user:
     st.subheader("Felhasználói belépés")
     users_df, users_ws = get_users_df()
@@ -93,63 +94,73 @@ if st.session_state.user_mode == "user" and not st.session_state.user:
             if new_uname in users_df["username"].values:
                 st.error("Ez a felhasználónév már foglalt.")
             elif not new_uname or not new_pw:
-                st.error("Adj meg felhasználónevet ÉS jelszót!")
+                st.error("Adj meg felhasználónevet és jelszót!")
             else:
-                users_df = pd.concat([users_df, pd.DataFrame([{"username": new_uname, "password": new_pw}])], ignore_index=True)
+                new_row = pd.DataFrame([{"username": new_uname, "password": new_pw}])
+                users_df = pd.concat([users_df, new_row], ignore_index=True)
                 save_users_df(users_df, users_ws)
                 st.success("Sikeres regisztráció!")
                 st.session_state.user = new_uname
     if not st.session_state.user:
         st.stop()
 
-# ---- Akció-naplózás ----
+# ---- Naplózás ----
 def log_action(action, who, extra=""):
     sh = get_gsheet()
     try:
-        ws = sh.worksheet('Aktivitas')
-    except Exception:
-        ws = sh.add_worksheet(title='Aktivitas', rows=1000, cols=5)
+        ws = sh.worksheet("Aktivitas")
+    except:
+        ws = sh.add_worksheet(title="Aktivitas", rows=1000, cols=4)
         ws.append_row(["Idő", "Ki", "Akció", "Részletek"])
-    ws.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), who, action, extra])
+    ws.append_row([
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        who,
+        action,
+        extra
+    ])
 
 st.success(f"Szia, {st.session_state.user}!")
 
-# Foglalási sheet kezelése
+# ---- Foglalások beolvasása ----
 df, ws = get_foglalasok_df()
 if df.empty or "Dátum" not in df.columns:
     df = pd.DataFrame(columns=["Dátum", "Gyermek(ek) neve", "Lovak", "Kezdés", "Időtartam (perc)", "Fő", "Ismétlődik", "RepeatGroupID", "Megjegyzés"])
 
-st.header("Új foglalás hozzáadása")
+# ---- Új foglalás hozzáadása ----
+st.header("Új foglalás")
 datum = st.date_input("Dátum")
 nev = st.text_input("Gyermek(ek) neve")
-ido = st.text_input("Kezdés (pl. 09:00)")
-ido_min = st.number_input("Időtartam (perc)", value=30)
+lovak = st.text_input("Lovak", value="")
+kezdes = st.text_input("Kezdés (pl. 09:00)", value="09:00")
+idotartam = st.number_input("Időtartam (perc)", value=30)
+fo = st.number_input("Fő", value=1)
+megjegyzes = st.text_input("Megjegyzés")
+
 if st.button("Foglalás rögzítése"):
-    df = pd.concat([
-        df,
-        pd.DataFrame([{
-            "Dátum": datum.strftime("%Y-%m-%d"),
-            "Gyermek(ek) neve": nev,
-            "Lovak": "",
-            "Kezdés": ido,
-            "Időtartam (perc)": ido_min,
-            "Fő": 1,
-            "Ismétlődik": False,
-            "RepeatGroupID": "",
-            "Megjegyzés": ""
-        }])
-    ], ignore_index=True)
+    uj = pd.DataFrame([{
+        "Dátum": datum.strftime("%Y-%m-%d"),
+        "Gyermek(ek) neve": nev,
+        "Lovak": lovak,
+        "Kezdés": kezdes,
+        "Időtartam (perc)": idotartam,
+        "Fő": fo,
+        "Ismétlődik": False,
+        "RepeatGroupID": "",
+        "Megjegyzés": megjegyzes
+    }])
+    df = pd.concat([df, uj], ignore_index=True)
     save_foglalasok_df(df, ws)
-    log_action("Új foglalás", st.session_state.user, f"{datum} {nev} {ido}")
+    log_action("Foglalás", st.session_state.user, f"{datum} {nev}")
     st.success("Foglalás rögzítve!")
 
-st.header("Foglalások")
+# ---- Foglalások listázása és törlése ----
+st.header("Foglalások listája")
 for i, row in df.iterrows():
-    st.write(f"{row['Dátum']} {row['Kezdés']} - {row['Gyermek(ek) neve']} [{row['Fő']} fő]")
-    if st.session_state.user == "admin" or st.session_state.user == row['Gyermek(ek) neve']:
+    st.write(f"📅 {row['Dátum']} ⏰ {row['Kezdés']} 👤 {row['Gyermek(ek) neve']} ({row['Fő']} fő) 🐎 {row['Lovak']} – {row['Megjegyzés']}")
+    if st.session_state.user == "admin" or st.session_state.user == row["Gyermek(ek) neve"]:
         if st.button(f"Törlés_{i}", key=f"del_{i}"):
             log_action("Törlés", st.session_state.user, f"{row['Dátum']} {row['Gyermek(ek) neve']}")
             df = df.drop(i)
-            save_foglalasok_df(df, ws)
+            save_foglalasok_df(df.reset_index(drop=True), ws)
             st.success("Törölve!")
             st.experimental_rerun()
