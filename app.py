@@ -28,7 +28,7 @@ def get_gsheet_df():
             "Dátum","Gyermek(ek) neve","Lovak","Kezdés",
             "Időtartam (perc)","Fő","Ismétlődik","RepeatGroupID","Megjegyzés"
         ])
-    st.stop() df, ws
+    return df, ws
 
 
 def save_gsheet_df(df, ws):
