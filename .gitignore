@@ -1,0 +1,6 @@
+# Google credentials
+*.json
+
+# Py cache
+__pycache__/
+*.pyc

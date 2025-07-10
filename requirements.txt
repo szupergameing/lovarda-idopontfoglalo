@@ -1,4 +1,6 @@
 streamlit
 pandas
-ics
+gspread
+google-auth
 openpyxl
+ics
