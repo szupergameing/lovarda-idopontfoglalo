@@ -101,22 +101,51 @@ if dark:
     )
 st.title(labels["title"])
 
-# ---- Admin Auth ----
-st.sidebar.title(labels["admin_panel"])
-if not st.session_state["authenticated"]:
-    pwd = st.sidebar.text_input(labels["login"], type="password")
-    if st.sidebar.button(labels["login"]):
-        if pwd == ADMIN_PASSWORD:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.sidebar.error(labels["incorrect_pw"])
-else:
-    st.sidebar.success("✅ Admin")
-    if st.sidebar.button(labels["logout"]):
-        st.session_state["authenticated"] = False
-        st.rerun()
-    st.sidebar.number_input("Szünet perc", 0, 60, st.session_state["break_minutes"], key="break_minutes")
+# ---- User Authentication ----
+# load users sheet (2nd worksheet)
+def get_users():
+    gc = gspread.service_account(filename=GOOGLE_JSON)
+    sh = gc.open_by_key(GOOGLE_SHEET_ID)
+    ws_users = sh.get_worksheet(1)
+    df_users = get_as_dataframe(ws_users, evaluate_formulas=True).dropna(how="all")
+    return df_users
+
+# ensure session variables
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "role" not in st.session_state:
+    st.session_state.role = None
+
+if not st.session_state.authenticated:
+    st.sidebar.title("🔐 Bejelentkezés")
+    mode = st.sidebar.radio("Válassz szerepet:", ["Lovas", "Admin"])
+    if mode == "Lovas":
+        uname = st.sidebar.text_input("Felhasználónév")
+        pwd = st.sidebar.text_input("Jelszó", type="password")
+        if st.sidebar.button("Bejelentkezés", key="rider_login"):
+            users = get_users()
+            # ellenőrzés
+            if any((users['username']==uname) & (users['password']==pwd)):
+                st.session_state.authenticated = True
+                st.session_state.role = 'rider'
+                st.session_state.user = uname
+                st.sidebar.success(f"Bejelentkezve: {uname}")
+                st.experimental_rerun()
+            else:
+                st.sidebar.error("Hibás felhasználónév vagy jelszó.")
+    else:
+        pwd = st.sidebar.text_input("Admin jelszó", type="password")
+        if st.sidebar.button("Bejelentkezés", key="admin_login"):
+            if pwd == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.role = 'admin'
+                st.sidebar.success("Admin bejelentkezve")
+                st.experimental_rerun()
+            else:
+                st.sidebar.error(labels["incorrect_pw"])
+    # ha még nincs auth, állj meg
+    if not st.session_state.authenticated:
+        st.stop()
 
 # ---- Date & Restrictions ----
 selected_date = st.date_input(labels["slot"])
