@@ -1,6 +1,7 @@
 # app.py
 # Teljes, egyesített Lovarda Időpontfoglaló alkalmazás
 # Csak admin regisztrálhat felhasználókat, vendégek csak belépni tudnak
+# Hibakezelés: safe_rerun() használata st.experimental_rerun() helyett
 
 import streamlit as st
 import pandas as pd
@@ -15,6 +16,15 @@ try:
     ICS_OK = True
 except ImportError:
     ICS_OK = False
+
+# ---- Streamlit újrarajzolás biztonságos hívása ----
+def safe_rerun():
+    """
+    Ha elérhető, meghívja az experimental_rerun-t,
+    különben csak visszatér.
+    """
+    if hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 # ---- Google Sheets beállítások ----
 GOOGLE_SHEET_ID = "1xGeEqZ0Y-o7XEIR0mOBvgvTk7FVRzz7TTGRKrSCy6Uo"
@@ -40,7 +50,6 @@ def get_bookings_df():
     sh = get_gsheet()
     ws = sh.worksheet("Foglalások")
     df = get_as_dataframe(ws, evaluate_formulas=True).dropna(how="all").fillna("")
-    # Ha üres, legalább a fejléc legyen meg
     if df.empty or "Dátum" not in df.columns:
         df = pd.DataFrame(columns=[
             "Dátum","Gyermek(ek) neve","Lovak","Kezdés",
@@ -54,7 +63,6 @@ def save_bookings_df(df, ws):
 # --- Aktivítás-naplózás ---
 def log_action(actor, action, details=""):
     sh = get_gsheet()
-    # ha nincs Aktivitas munkalap, létrehozzuk
     try:
         ws = sh.worksheet("Aktivitas")
     except gspread.WorksheetNotFound:
@@ -91,38 +99,39 @@ if not st.session_state.authenticated:
             st.session_state.authenticated = True
             st.session_state.user = "admin"
             st.sidebar.success("Admin belépve")
-            st.experimental_rerun()
+            safe_rerun()
         else:
             st.sidebar.error("Hibás jelszó")
     st.stop()
 else:
-    # Admin felületen: új felhasználó létrehozása
+    # Admin: új felhasználó létrehozása
     st.sidebar.subheader("Új felhasználó regisztrálása")
     new_uname = st.sidebar.text_input("Felhasználónév")
     new_pw    = st.sidebar.text_input("Jelszó", type="password")
     if st.sidebar.button("Regisztrálás"):
         users_df, users_ws = get_users_df()
         if not new_uname or not new_pw:
-            st.sidebar.error("Adj meg mindkét mezőt!")
+            st.sidebar.error("Mindkét mezőt töltsd ki!")
         elif new_uname in users_df["username"].values:
-            st.sidebar.error("Ez a név már létezik.")
+            st.sidebar.error("Ez a felhasználónév már létezik.")
         else:
-            users_df = pd.concat([users_df,
-                pd.DataFrame([{"username":new_uname,"password":new_pw}])
+            users_df = pd.concat([
+                users_df,
+                pd.DataFrame([{"username": new_uname, "password": new_pw}])
             ], ignore_index=True)
             save_users_df(users_df, users_ws)
-            log_action("admin","Felhasználó regisztrálva",new_uname)
+            log_action("admin", "Felhasználó regisztrálva", new_uname)
             st.sidebar.success(f"{new_uname} regisztrálva!")
+            safe_rerun()
 
-    # Break beállítása
+    # Admin: szünet beállítása
     st.sidebar.markdown("---")
     st.sidebar.subheader("Szünet (perc)")
     st.session_state.break_minutes = st.sidebar.number_input(
-        "", min_value=0, max_value=60,
-        value=st.session_state.break_minutes
+        "", min_value=0, max_value=60, value=st.session_state.break_minutes
     )
 
-# ---- Alapoldal ----
+# ---- Főoldal cím ----
 st.title("🐴 Lovarda Időpontfoglaló")
 
 # ---- Dátumválasztó és korlátozások ----
@@ -147,27 +156,22 @@ if invalid and not st.session_state.authenticated:
 bookings_df, bookings_ws = get_bookings_df()
 
 # ---- Segédfüggvények ----
-def slot_overlapping(start_time, end_time, on_date, df):
-    """True, ha ütközés van a meglévő foglalásokkal."""
-    s_dt = datetime.combine(on_date, start_time)
-    e_dt = datetime.combine(on_date, end_time)
-    today = on_date.strftime("%Y-%m-%d")
-    for _, r in df[df["Dátum"]==today].iterrows():
-        b_start = datetime.combine(on_date, datetime.strptime(r["Kezdés"],"%H:%M").time())
-        b_end = b_start + timedelta(minutes=int(r["Időtartam (perc)"]))
-        if s_dt < b_end and b_start < e_dt:
+def slot_overlapping(s_time, e_time, on_date, df):
+    s_dt = datetime.combine(on_date, s_time)
+    e_dt = datetime.combine(on_date, e_time)
+    for _, r in df[df["Dátum"]==on_date.strftime("%Y-%m-%d")].iterrows():
+        b_s = datetime.combine(on_date, datetime.strptime(r["Kezdés"],"%H:%M").time())
+        b_e = b_s + timedelta(minutes=int(r["Időtartam (perc)"]))
+        if s_dt < b_e and b_s < e_dt:
             return True
     return False
 
 def get_free_slots(duration, on_date, df):
-    """Visszaadja az összes szabad slotot megadott hosszra."""
     slots = []
     cur = datetime.combine(on_date, START_TIME)
     lunch_done = False
-    day_bookings = df[df["Dátum"]==on_date.strftime("%Y-%m-%d")]
     br = st.session_state.break_minutes
     while cur.time() <= (datetime.combine(on_date,END_TIME)-timedelta(minutes=duration)).time():
-        # ebédszünet
         if not lunch_done and LUNCH_WINDOW_START <= cur.time() < LUNCH_WINDOW_END:
             cur += LUNCH_BREAK_DURATION
             lunch_done = True
@@ -179,14 +183,12 @@ def get_free_slots(duration, on_date, df):
         cur += timedelta(minutes=duration+br)
     return slots
 
-def has_duplicate_name(df, name, on_date, start, end):
-    """Ellenőrzi, ha ugyanazzal a névvel ütköző foglalás van."""
-    today = on_date.strftime("%Y-%m-%d")
-    for _, r in df[df["Dátum"]==today].iterrows():
-        if r["Gyermek(ek) neve"]==name:
-            r_s = datetime.combine(on_date, datetime.strptime(r["Kezdés"],"%H:%M").time())
-            r_e = r_s + timedelta(minutes=int(r["Időtartam (perc)"]))
-            if start < r_e and r_s < end:
+def has_duplicate_name(df, name, on_date, s_dt, e_dt):
+    for _, r in df[df["Dátum"]==on_date.strftime("%Y-%m-%d")].iterrows():
+        if r["Gyermek(ek) neve"] == name:
+            b_s = datetime.combine(on_date, datetime.strptime(r["Kezdés"],"%H:%M").time())
+            b_e = b_s + timedelta(minutes=int(r["Időtartam (perc)"]))
+            if s_dt < b_e and b_s < e_dt:
                 return True
     return False
 
@@ -213,11 +215,9 @@ if not st.session_state.authenticated:
                 if has_duplicate_name(bookings_df, name, selected_date, s_dt, e_dt):
                     st.warning("Ugyanazzal a névvel ütköző foglalás!")
                 else:
-                    # létrehozás
                     rg = str(uuid.uuid4()) if repeat else ""
                     dates = [selected_date]
                     if repeat:
-                        # csak augusztus hónapjára
                         nxt = selected_date + timedelta(weeks=1)
                         while nxt.month == selected_date.month:
                             dates.append(nxt)
@@ -239,25 +239,21 @@ if not st.session_state.authenticated:
                     save_bookings_df(bookings_df, bookings_ws)
                     log_action(name, "Foglalás", f"{selected_date} {slot}")
                     st.success("Foglalás rögzítve!")
-                    st.experimental_rerun()
+                    safe_rerun()
     st.subheader("📆 Elérhető időpontok")
     if opts:
         for s,e in free:
             st.write(f"{s.strftime('%H:%M')} – {e.strftime('%H:%M')}")
     else:
         st.info("Nincsenek szabad időpontok.")
-
     st.stop()
 
 # ---- Admin felület ----
 st.subheader("🛠️ Admin felület")
-
-# átalakítjuk dátumokat és hozzáadunk heti, havi mezőt
 bookings_df["Dátum"] = pd.to_datetime(bookings_df["Dátum"])
 bookings_df["Hét"] = bookings_df["Dátum"].dt.isocalendar().week
 bookings_df["Hónap"] = bookings_df["Dátum"].dt.month
 
-# heti nézet kiválasztás
 year = selected_date.year
 weeks = sorted(bookings_df["Hét"].unique())
 week_labels = []
@@ -286,30 +282,28 @@ else:
                 save_bookings_df(bookings_df, bookings_ws)
                 log_action("admin","Törlés",f"{d} {r['Gyermek(ek) neve']}")
                 st.success("Törölve")
-                st.experimental_rerun()
+                safe_rerun()
         with c2:
             if st.button("🦄 Lovak", key=f"horses_{idx}"):
                 st.session_state.mod_idx = idx
         with c3:
-            # idő áthelyezése
             dur = int(r["Időtartam (perc)"])
-            times = []
+            times=[]
             t = datetime.combine(r["Dátum"].date(), START_TIME)
             end_day = datetime.combine(r["Dátum"].date(), END_TIME) - timedelta(minutes=dur)
             while t <= end_day:
-                times.append(t.time())
-                t += timedelta(minutes=5)
+                times.append(t.time()); t += timedelta(minutes=5)
             opts2 = [tt.strftime("%H:%M") for tt in times]
-            cur_idx = opts2.index(r["Kezdés"]) if r["Kezdés"] in opts2 else 0
-            new_start = st.selectbox("Csúsztatás", opts2, index=cur_idx, key=f"move_{idx}")
+            cur_i = opts2.index(r["Kezdés"]) if r["Kezdés"] in opts2 else 0
+            new_s = st.selectbox("Csúsztatás", opts2, index=cur_i, key=f"move_{idx}")
             if st.button("Átcsúsztat", key=f"mvbtn_{idx}"):
-                bookings_df.at[idx, "Kezdés"] = new_start
+                bookings_df.at[idx, "Kezdés"] = new_s
                 save_bookings_df(bookings_df, bookings_ws)
-                log_action("admin","Áthelyezés",f"{d} új kezdés: {new_start}")
+                log_action("admin","Áthelyezés",f"{d} új kezdés: {new_s}")
                 st.success("Áthelyezve")
-                st.experimental_rerun()
+                safe_rerun()
 
-    # lovak hozzárendelés
+    # Lovak hozzárendelés
     if "mod_idx" in st.session_state:
         m = st.session_state.mod_idx
         row = bookings_df.loc[m]
@@ -324,31 +318,25 @@ else:
             log_action("admin","Lovak mentve", row["Gyermek(ek) neve"])
             del st.session_state.mod_idx
             st.success("Lovak mentve")
-            st.experimental_rerun()
+            safe_rerun()
 
-    # statisztika
+    # Statisztikák
     with st.expander("📊 Statisztikák"):
-        # Top10 nevek
         st.write("**Top 10 név**")
         st.dataframe(bookings_df["Gyermek(ek) neve"].value_counts().head(10))
-        # Lókihasználtság
         exploded = bookings_df["Lovak"].astype(str).str.split(",").explode().str.strip()
         st.write("**Lovak kihasználtsága**")
-        st.dataframe(exploded[exploded!="" ].value_counts())
-        # Heti stat
+        st.dataframe(exploded[exploded!=""].value_counts())
         st.write("**Heti lóhasználat**")
         week_use = exploded[bookings_df["Hét"]==sel_week]
         st.bar_chart(week_use.value_counts())
-        # Havi stat
         st.write("**Havi lóhasználat**")
         for m in sorted(bookings_df["Hónap"].unique()):
             st.write(f"Hónap: {m}")
             month_use = exploded[bookings_df["Hónap"]==m]
             st.bar_chart(month_use.value_counts())
-        # Duplikált nevek
-        dup = bookings_df["Gyermek(ek) neve"].value_counts()
         st.write("**Duplikált nevek**")
+        dup = bookings_df["Gyermek(ek) neve"].value_counts()
         st.dataframe(dup[dup>1])
-        # Jegyzetek
         st.write("**Jegyzetek**")
         st.dataframe(bookings_df[["Gyermek(ek) neve","Dátum","Kezdés","Megjegyzés"]])
