@@ -275,7 +275,7 @@ else:
             m=st.session_state['move_idx']
         else:
             main_col.info("Válassz egy foglalást a 'Foglalások' menüben.")
-            return
+            st.stop()
         row=df_admin.loc[m]
         main_col.info(f"{row['Dátum'].strftime('%Y-%m-%d')} {row['Kezdés']} – {row['Gyermek(ek) neve']}")
         cur=[h for h in str(row['Lovak']).split(',') if h.strip() in HORSES]
