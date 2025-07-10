@@ -172,47 +172,53 @@ def has_duplicate_name(bookings,name,on_date,s_dt,e_dt):
 # ---- Guest View ----
 if not st.session_state["authenticated"]:
     st.subheader(labels["reserve"])
-    dur = st.selectbox(labels["duration"],[30,60,90])
-    if st.button("🔄 Frissítés"): st.experimental_rerun()
-    df_refresh,_ = get_gsheet_df()
-    slots = get_free_slots(dur, selected_date, df_refresh)
+    # Időtartam választó
+    dur = st.selectbox(labels["duration"], [30, 60, 90])
+    # Kiszámoljuk a szabad időpontokat a friss adatdf alapján
+    slots = get_free_slots(dur, selected_date, df)
     opts = [f"{s[0].strftime('%H:%M')}-{s[1].strftime('%H:%M')} ({s[2]}p)" for s in slots]
     with st.form("form_guest"):
         name = st.text_input(labels["name"])
-        cnt = st.number_input(labels["count"],1,MAX_CHILDREN_PER_SLOT,1)
-        note=st.text_input(labels["note"])
-        choice=st.selectbox(labels["slot"], opts if opts else [labels["no_slots"]])
+        cnt = st.number_input(labels["count"], 1, MAX_CHILDREN_PER_SLOT, 1)
+        note = st.text_input(labels["note"])
+        choice = st.selectbox(labels["slot"], opts if opts else [labels["no_slots"]])
         rep = st.checkbox(labels["repeat"])
         if st.form_submit_button(labels["save"]) and opts:
             idx = opts.index(choice)
-            s,e,_ = slots[idx]
-            s_dt = datetime.combine(selected_date,s)
-            e_dt = datetime.combine(selected_date,e)
-            df_cur,_ = get_gsheet_df()
-            if has_duplicate_name(df_cur,name,selected_date,s_dt,e_dt):
+            s, e, _ = slots[idx]
+            s_dt = datetime.combine(selected_date, s)
+            e_dt = datetime.combine(selected_date, e)
+            if has_duplicate_name(df, name, selected_date, s_dt, e_dt):
                 st.warning(labels["duplicate_name"])
-            elif slot_overlapping(s,e,selected_date, df_cur[df_cur["Dátum"]==selected_date.strftime("%Y-%m-%d")]):
+            elif slot_overlapping(s, e, selected_date,
+                                  df[df["Dátum"] == selected_date.strftime("%Y-%m-%d")]):
                 st.error(labels["already_booked"])
             else:
                 rg = str(uuid.uuid4()) if rep else ""
-                dates=[selected_date]
+                dates = [selected_date]
                 if rep:
-                    nd=selected_date+timedelta(weeks=1)
-                    while nd.month==8:
-                        dates.append(nd); nd+=timedelta(weeks=1)
-                rows=[{
-                    "Dátum":d.strftime("%Y-%m-%d"),"Gyermek(ek) neve":name,
-                    "Lovak":"","Kezdés":s.strftime("%H:%M"),
-                    "Időtartam (perc)":dur,"Fő":cnt,
-                    "Ismétlődik":rep,"RepeatGroupID":rg,
-                    "Megjegyzés":note
+                    nd = selected_date + timedelta(weeks=1)
+                    while nd.month == 8:
+                        dates.append(nd)
+                        nd += timedelta(weeks=1)
+                rows = [{
+                    "Dátum": d.strftime("%Y-%m-%d"),
+                    "Gyermek(ek) neve": name,
+                    "Lovak": "",
+                    "Kezdés": s.strftime("%H:%M"),
+                    "Időtartam (perc)": dur,
+                    "Fő": cnt,
+                    "Ismétlődik": rep,
+                    "RepeatGroupID": rg,
+                    "Megjegyzés": note
                 } for d in dates]
-                df_new=pd.concat([df_cur,pd.DataFrame(rows)],ignore_index=True)
+                df_new = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
                 save_gsheet_df(df_new, ws)
                 st.success(labels["save"])
                 st.experimental_rerun()
     st.subheader(labels["available_slots"])
-    if not slots: st.info(labels["no_slots"])
+    if not slots:
+        st.info(labels["no_slots"])
     else:
         for s in slots:
             st.write(f"{s[0].strftime('%H:%M')} – {s[1].strftime('%H:%M')} ({s[2]}p)")
