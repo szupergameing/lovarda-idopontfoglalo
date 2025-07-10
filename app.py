@@ -215,7 +215,7 @@ if not st.session_state["authenticated"]:
                 df_new = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
                 save_gsheet_df(df_new, ws)
                 st.success(labels["save"])
-                st.experimental_rerun()
+                st.rerun()
     st.subheader(labels["available_slots"])
     if not slots:
         st.info(labels["no_slots"])
@@ -268,7 +268,7 @@ else:
                         df_admin.drop(idx, inplace=True)
                         save_gsheet_df(df_admin, ws)
                         st.success(labels["delete"])
-                        st.experimental_rerun()
+                        st.rerun()
                 with c2:
                     if st.button(labels["move"], key=f"mv{idx}"):
                         st.session_state['move_idx'] = idx
@@ -290,7 +290,7 @@ else:
             save_gsheet_df(df_admin, ws)
             st.success(labels['save'])
             del st.session_state['move_idx']
-            st.experimental_rerun()
+            st.rerun()
 
     # Statisztika
     elif section=="Statisztika":
