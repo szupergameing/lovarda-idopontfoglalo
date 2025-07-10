@@ -13,7 +13,8 @@ except ImportError:
 
 # ---- Google Sheets setup ----
 GOOGLE_SHEET_ID = "1xGeEqZ0Y-o7XEIR0mOBvgvTk7FVRzz7TTGRKrSCy6Uo"
-GOOGLE_JSON = "mystic-fountain-300911-9b2c042063fa.json"
+GOOGLE_JSON = "/etc/secrets/mystic-fountain-300911-9b2c042063fa.json"
+
 
 def get_gsheet_df():
     gc = gspread.service_account(filename=GOOGLE_JSON)
