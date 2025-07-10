@@ -31,7 +31,11 @@ def get_gsheet_df():
     return df, ws
 
 def save_gsheet_df(df, ws):
-    keep = ["Dátum", "Gyermek(ek) neve", "Lovak", "Kezdés", "Időtartam (perc)", "Fő", "Ismétlődik", "RepeatGroupID", "Megjegyzés"]
+    # Először kitöröljük a sheet minden tartalmát,
+    # majd újraíjuk az aktuális DataFrame-et
+    keep = ["Dátum", "Gyermek(ek) neve", "Lovak", "Kezdés",
+            "Időtartam (perc)", "Fő", "Ismétlődik", "RepeatGroupID", "Megjegyzés"]
+    ws.clear()
     set_with_dataframe(ws, df[keep], include_index=False)
 
 # ---- Alapbeállítások ----
@@ -274,7 +278,7 @@ if not st.session_state["authenticated"]:
         for s in szlots:
             st.write(f"{s[0].strftime('%H:%M')} – {s[1].strftime('%H:%M')} ({s[2]}p)")
     else:
-        st.info(labels["no_slots"])
+        st.info(labels["no_slots"])  
 
 # ---- Admin-felület ----
 if st.session_state["authenticated"]:
@@ -306,11 +310,8 @@ if st.session_state["authenticated"]:
         sel_label = st.selectbox(labels["select_week"], week_labels, index=len(week_labels)-1)
         week_idx_list = [w for w, lbl in week_ranges if lbl == sel_label]
         sel_week = week_idx_list[0] if week_idx_list else weeks[0]
-        week_df = (
-            df[df["Hét"] == sel_week]
-            .sort_values(by=["Dátum", "Kezdés"])
-            .reset_index(drop=True)
-        )
+        # Itt már NEM reseteljük az indexeket
+        week_df = df[df["Hét"] == sel_week].sort_values(by=["Dátum", "Kezdés"])
 
     if not week_ranges or week_df.empty:
         st.warning("Nincs foglalás ezen a héten.")
@@ -377,17 +378,14 @@ if st.session_state["authenticated"]:
                 st.write(labels["horse_usage"])
                 lovak = df["Lovak"].astype(str).fillna("").apply(lambda x: x.split(",") if x else []).explode().str.strip()
                 st.dataframe(lovak[lovak!=""].value_counts())
-                # Heti stat
                 st.write("**"+labels["stat_weekly"]+"**")
                 usage_week = df[df["Hét"]==sel_week]["Lovak"].astype(str).fillna("").apply(lambda x: x.split(",") if x else []).explode().str.strip().value_counts()
                 st.bar_chart(usage_week)
-                # Havi stat
                 st.write("**"+labels["stat_monthly"]+"**")
                 for m in sorted(df["Hónap"].unique()):
                     usage_month = df[df["Hónap"]==m]["Lovak"].astype(str).fillna("").apply(lambda x: x.split(",") if x else []).explode().str.strip().value_counts()
                     st.write(f"Hónap: {m}")
                     st.bar_chart(usage_month)
-                # Duplikált nevek keresése
                 dupl_nevek = df["Gyermek(ek) neve"].value_counts()
                 st.write("**Duplikált nevek:**")
                 st.dataframe(dupl_nevek[dupl_nevek > 1])
