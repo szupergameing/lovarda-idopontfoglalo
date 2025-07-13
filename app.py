@@ -47,9 +47,8 @@ def load_bookings_df():
 
 @st.cache_data(ttl=60)
 def load_users_df():
-    client = get_gspread_client()
-    sh     = client.open_by_key(GOOGLE_SHEET_ID)
-    for name in ("Felhasználók", "Felhasznalok"):
+    sh = get_gspread_client().open_by_key(GOOGLE_SHEET_ID)
+    for name in ("Felhasználók","Felhasznalok"):
         try:
             ws = sh.worksheet(name)
             break
@@ -144,7 +143,7 @@ lunch_dur_str   = raw.get("lunch_dur",   str(DEFAULT_LUNCH_DUR))
 break_min_str   = raw.get("break_min",   str(DEFAULT_BREAK_MIN))
 
 if "lunch_start" not in st.session_state:
-    st.session_state["lunch_start"] = datetime.strptime(lunch_start_str, "%H:%M").time()
+    st.session_state["lunch_start"] = datetime.strptime(lunch_start_str,"%H:%M").time()
 if "lunch_dur" not in st.session_state:
     st.session_state["lunch_dur"]   = int(lunch_dur_str)
 if "break_min" not in st.session_state:
@@ -184,8 +183,7 @@ if not st.session_state.auth:
         pwd = st.text_input("Jelszó", type="password")
         if st.button("Bejelentkezés adminként"):
             if pwd==ADMIN_PW:
-                st.session_state.auth=True
-                safe_rerun()
+                st.session_state.auth=True; safe_rerun()
             else:
                 st.error("Hibás jelszó.")
     st.stop()
@@ -210,11 +208,9 @@ def get_free_slots(duration):
     cur   = datetime.combine(sel_date, START_TIME)
     odf   = lunch_over_df[lunch_over_df["Dátum"]==sel_date]
     if not odf.empty:
-        ls = odf.iloc[0]["Kezdes"]
-        ld = int(odf.iloc[0]["HosszPerc"])
+        ls = odf.iloc[0]["Kezdes"]; ld = int(odf.iloc[0]["HosszPerc"])
     else:
-        ls = st.session_state["lunch_start"]
-        ld = st.session_state["lunch_dur"]
+        ls = st.session_state["lunch_start"]; ld = st.session_state["lunch_dur"]
     lunch_end = (datetime.combine(sel_date, ls) + timedelta(minutes=ld)).time()
     break_min = st.session_state["break_min"]
     today     = bookings_df[bookings_df["Dátum"]==sel_date]
@@ -238,7 +234,7 @@ def get_free_slots(duration):
         cur += timedelta(minutes=duration + break_min)
     return slots
 
-# ---- Lovas nézet ----
+# ---- Rider nézet ----
 if st.session_state.role=="rider":
     st.subheader(f"Üdv, {st.session_state.user}!")
     names = st.text_input("Gyermek(ek) neve(i), vesszővel elválasztva", value=st.session_state.user)
@@ -248,20 +244,52 @@ if st.session_state.role=="rider":
         st.info("Nincs szabad időpont.")
     else:
         for i,(s,e) in enumerate(free):
-            if st.button(f"Foglal {s.strftime('%H:%M')}–{e.strftime('%H:%M')}", key=f"bk{i}"):
+            c1,c2 = st.columns([1,1])
+            label = f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')}"
+            # sima Foglalás
+            if c1.button(f"Foglal {label}", key=f"bk{i}"):
                 new = {
-                    "Dátum":sel_date,"Gyermek(ek) neve":names,
-                    "Lovak":"","Kezdés":s.strftime("%H:%M"),
+                    "Dátum":sel_date, "Gyermek(ek) neve":names,
+                    "Lovak":"", "Kezdés":s.strftime("%H:%M"),
                     "Időtartam (perc)":dur,"Fő":1,
-                    "Ismétlődik":False,"RepeatGroupID":"","Megjegyzés":""
+                    "Ismétlődik":False, "RepeatGroupID":"", "Megjegyzés":""
                 }
                 bookings_df = pd.concat([bookings_df, pd.DataFrame([new])], ignore_index=True)
                 save_df_to_sheet(bookings_df, "Foglalások")
-                load_bookings_df.clear()
-                st.success("Foglalás sikeres!")
-                safe_rerun()
+                st.success("Foglalás sikeres!"); safe_rerun()
 
-    # ── javított szűrés ──
+            # Örökítés gomb: heti ismétlés a következő évre
+            if c2.button(f"Örökítés {label}", key=f"orok{i}"):
+                future = pd.date_range(
+                    start=sel_date + timedelta(weeks=1),
+                    end=sel_date + timedelta(days=365),
+                    freq='7D'
+                ).date
+                conflicts = [d for d in future
+                             if ((bookings_df["Dátum"]==d)&
+                                 (bookings_df["Kezdés"]==s.strftime("%H:%M"))).any()]
+                if conflicts:
+                    st.warning(f"Ütközés: már foglalt napok: {', '.join(map(str,conflicts))}")
+                new_entries = []
+                for d in future:
+                    if d not in conflicts:
+                        new_entries.append({
+                            "Dátum": d,
+                            "Gyermek(ek) neve": names,
+                            "Lovak":"",
+                            "Kezdés": s.strftime("%H:%M"),
+                            "Időtartam (perc)": dur,
+                            "Fő": 1,
+                            "Ismétlődik": True,
+                            "RepeatGroupID": f"orok{i}",
+                            "Megjegyzés": "örökítés"
+                        })
+                if new_entries:
+                    bookings_df = pd.concat([bookings_df, pd.DataFrame(new_entries)], ignore_index=True)
+                    save_df_to_sheet(bookings_df, "Foglalások")
+                    st.success("Örökítés lefuttatva az elkövetkező évre!"); safe_rerun()
+
+    # saját foglalások ICS
     mask = (
         bookings_df["Gyermek(ek) neve"]
         .fillna("")
@@ -271,12 +299,8 @@ if st.session_state.role=="rider":
     my_df = bookings_df[mask]
     if not my_df.empty:
         ics = generate_ics(my_df)
-        st.download_button(
-            "ICS export (saját)",
-            data=ics,
-            file_name="sajat_foglalasok.ics",
-            mime="text/calendar"
-        )
+        st.download_button("ICS export (saját)", data=ics,
+                           file_name="sajat_foglalasok.ics", mime="text/calendar")
     st.stop()
 
 # ---- Admin nézet ----
@@ -292,11 +316,12 @@ if menu=="Foglalások":
     else:
         for idx,r in wdf.iterrows():
             st.write(f"**{r['Dátum']} {r['Kezdés']}** – {r['Gyermek(ek) neve']} ({r['Időtartam (perc)']}p)")
-            c1,c2 = st.columns([1,1])
+            c1,c2,c3 = st.columns([1,1,1])
+            # egyedi sor törlése
             if c1.button("❌ Törlés", key=f"del{idx}"):
                 bookings_df = bookings_df.drop(idx)
-                save_df_to_sheet(bookings_df,"Foglalások")
-                safe_rerun()
+                save_df_to_sheet(bookings_df,"Foglalások"); safe_rerun()
+            # áthelyezés
             if st.session_state.get("edit_idx")!=idx:
                 if c2.button("↻ Áthelyez", key=f"mv{idx}"):
                     st.session_state["edit_idx"]=idx
@@ -307,7 +332,18 @@ if menu=="Foglalások":
                 if c2.button("Mentés", key=f"save{idx}"):
                     bookings_df.at[idx,"Kezdés"]=nt.strftime("%H:%M")
                     save_df_to_sheet(bookings_df,"Foglalások")
-                    safe_rerun()
+                    del st.session_state["edit_idx"]; safe_rerun()
+            # Stop ismétlés, ha RepeatGroupID van
+            rg = r.get("RepeatGroupID","")
+            if rg:
+                if c3.button("↺ Stop ismétlés", key=f"stop{idx}"):
+                    bookings_df = bookings_df[~(
+                        (bookings_df["RepeatGroupID"]==rg) &
+                        (bookings_df["Dátum"]>=sel_date)
+                    )]
+                    save_df_to_sheet(bookings_df,"Foglalások")
+                    st.success("Ismétlés leállítva innen!"); safe_rerun()
+    # teljes ICS export
     ics_all = generate_ics(bookings_df)
     st.download_button("ICS export (összes)", data=ics_all,
                        file_name="osszes_foglalas.ics", mime="text/calendar")
@@ -319,10 +355,7 @@ elif menu=="Felhasználók":
     npw = st.text_input("Új jelszó", type="password")
     if st.button("Regisztrálás"):
         dfu = pd.concat([dfu, pd.DataFrame([{"username":nu,"password":npw}])], ignore_index=True)
-        save_df_to_sheet(dfu, "Felhasználók")
-        load_users_df.clear()
-        st.success("Felhasználó hozzáadva!")
-        safe_rerun()
+        save_df_to_sheet(dfu,"Felhasználók"); st.success("Felhasználó hozzáadva!"); safe_rerun()
 
 elif menu=="Statisztika":
     st.write("📊 Foglalások napi bontásban")
@@ -331,25 +364,25 @@ elif menu=="Statisztika":
 elif menu=="Beállítások":
     st.header("⚙️ Globális & napi ebédszünet & átnyergelési idő")
 
-    # 1) Ma foglalt időpontok
+    # 1) Mai foglalások idővonalként
     df_ = bookings_df[bookings_df["Dátum"]==sel_date].copy()
     if not df_.empty:
         df_["start"] = pd.to_datetime(df_["Dátum"].astype(str)+" "+df_["Kezdés"])
-        df_["end"]   = df_["start"] + pd.to_timedelta(df_["Időtartam (perc)"], unit="m")
+        df_["end"]   = df_["start"] + pd.to_timedelta(df_["Időtartam (perc)"],unit="m")
 
-    # 2) override vagy globális
+    # 2) napi override vagy globális
     odf = lunch_over_df[lunch_over_df["Dátum"]==sel_date]
     if not odf.empty:
         base_ls, base_ld = odf.iloc[0]["Kezdes"], odf.iloc[0]["HosszPerc"]
     else:
         base_ls, base_ld = st.session_state["lunch_start"], st.session_state["lunch_dur"]
 
-    # 3) élő slider + input
+    # 3) éles slider + input
     ov_ls_dt = st.slider(
         "Napi ebédszünet kezdete",
-        min_value=datetime.combine(sel_date, START_TIME),
-        max_value=datetime.combine(sel_date, END_TIME),
-        value=datetime.combine(sel_date, base_ls),
+        min_value=datetime.combine(sel_date,START_TIME),
+        max_value=datetime.combine(sel_date,END_TIME),
+        value=datetime.combine(sel_date,base_ls),
         format="HH:mm"
     )
     ov_ls = ov_ls_dt.time()
@@ -359,34 +392,33 @@ elif menu=="Beállítások":
         value=int(base_ld), step=5
     )
 
-    # 4) élő idővonal
+    # 4) idővonal kirajzolása
     lunch_bar = pd.DataFrame([{
         "type":"Ebédszünet",
-        "start": datetime.combine(sel_date, ov_ls),
-        "end":   datetime.combine(sel_date, ov_ls) + timedelta(minutes=int(ov_ld))
+        "start":datetime.combine(sel_date,ov_ls),
+        "end":  datetime.combine(sel_date,ov_ls)+timedelta(minutes=int(ov_ld))
     }])
     timeline = pd.concat([df_.assign(type="Foglalás"), lunch_bar], ignore_index=True)
     chart = (
         alt.Chart(timeline)
            .mark_bar(size=20)
-           .encode(
-               x='start:T', x2='end:T', y=alt.value(0),
-               color='type:N', tooltip=['type','start:T','end:T']
-           )
+           .encode(x='start:T', x2='end:T', y=alt.value(0),
+                   color='type:N', tooltip=['type','start:T','end:T'])
            .properties(height=80)
     )
     st.altair_chart(chart, use_container_width=True)
     st.markdown("---")
 
     # 5) mentés gombok
-    col1, col2 = st.columns(2)
+    col1,col2 = st.columns(2)
     with col1:
         if st.button("Mentés — Napi override"):
             new_ov = lunch_over_df[lunch_over_df["Dátum"]!=sel_date]
-            new_ov = pd.concat([new_ov, pd.DataFrame([{"Dátum":sel_date, "Kezdes":ov_ls, "HosszPerc":int(ov_ld)}])], ignore_index=True)
-            save_df_to_sheet(new_ov, "EbédSzunet")
-            st.success("Napi ebédszünet mentve.")
-            safe_rerun()
+            new_ov = pd.concat([new_ov,
+                pd.DataFrame([{"Dátum":sel_date,"Kezdes":ov_ls,"HosszPerc":int(ov_ld)}])
+            ], ignore_index=True)
+            save_df_to_sheet(new_ov,"EbédSzunet")
+            st.success("Napi ebédszünet mentve."); safe_rerun()
     with col2:
         br = st.number_input(
             "Átnyergelési idő (perc)",
@@ -398,18 +430,19 @@ elif menu=="Beállítások":
             df = load_settings_df()
             df.loc[df["Key"]=="break_min","Value"]=str(int(br))
             save_settings_df(df)
-            st.success("Átnyergelési idő mentve.")
-            safe_rerun()
+            st.success("Átnyergelési idő mentve."); safe_rerun()
 
-    # 6) Globális ebédszünet
+    # 6) globális ebédszünet beállítása
     st.markdown("### Globális ebédszünet")
     g1,g2 = st.columns(2)
     with g1:
         glob_ls = st.time_input("Alap ebédszünet kezdete", value=st.session_state["lunch_start"])
     with g2:
-        glob_ld = st.number_input("Alap ebédszünet hossza (perc)",
-                                  min_value=0, max_value=180,
-                                  value=st.session_state["lunch_dur"], step=5)
+        glob_ld = st.number_input(
+            "Alap ebédszünet hossza (perc)",
+            min_value=0, max_value=180,
+            value=st.session_state["lunch_dur"], step=5
+        )
     if st.button("Mentés — Globális ebédszünet"):
         st.session_state["lunch_start"]=glob_ls
         st.session_state["lunch_dur"]=glob_ld
@@ -417,8 +450,7 @@ elif menu=="Beállítások":
         df.loc[df["Key"]=="lunch_start","Value"]=glob_ls.strftime("%H:%M")
         df.loc[df["Key"]=="lunch_dur",    "Value"]=str(int(glob_ld))
         save_settings_df(df)
-        st.success("Globális ebédszünet mentve.")
-        safe_rerun()
+        st.success("Globális ebédszünet mentve."); safe_rerun()
 
 elif menu=="Naptár":
     st.header("📅 Tiltott napok kezelése")
@@ -431,10 +463,11 @@ elif menu=="Naptár":
         if eb<sb:
             st.error("Vége nem lehet korábbi.")
         else:
-            rng    = pd.date_range(sb, eb).date
+            rng = pd.date_range(sb, eb).date
             new_df = pd.DataFrame({"Dátum":rng})
-            merged = pd.concat([bd,new_df],ignore_index=True).\
-                       drop_duplicates(subset=["Dátum"]).sort_values("Dátum")
+            merged = pd.concat([bd,new_df],ignore_index=True)\
+                       .drop_duplicates(subset=["Dátum"])\
+                       .sort_values("Dátum")
             save_df_to_sheet(merged,"TiltottNapok")
             safe_rerun()
 
