@@ -1,10 +1,12 @@
 from datetime import datetime, date, time, timedelta
 import uuid
+import os
 import pandas as pd
 import streamlit as st
 import gspread
 import altair as alt
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from supabase import create_client, Client
 
 # ---- PERMANENS DARK MODE ----
 st.markdown("""
@@ -32,6 +34,15 @@ DEFAULT_BREAK_MIN   = 10
 DEFAULT_LUNCH_START = time(12,0)
 DEFAULT_LUNCH_DUR   = 45  # perc
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+@st.cache_resource
+def get_supabase_client() -> Client | None:
+    if SUPABASE_URL and SUPABASE_KEY:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    return None
+
 @st.cache_resource
 def get_gspread_client():
     return gspread.service_account(filename=GOOGLE_JSON)
@@ -47,6 +58,14 @@ def load_bookings_df():
 
 @st.cache_data(ttl=60)
 def load_users_df():
+    sb = get_supabase_client()
+    if sb is not None:
+        res = sb.table("users").select("*").execute()
+        data = res.data or []
+        df = pd.DataFrame(data)
+        if df.empty:
+            df = pd.DataFrame(columns=["username","password"])
+        return df
     sh = get_gspread_client().open_by_key(GOOGLE_SHEET_ID)
     for name in ("Felhasználók","Felhasznalok"):
         try:
@@ -112,6 +131,27 @@ def save_df_to_sheet(df: pd.DataFrame, sheet_name: str):
 
 def save_settings_df(df: pd.DataFrame):
     save_df_to_sheet(df, "Beallitasok")
+
+def save_user(username: str, password: str):
+    sb = get_supabase_client()
+    if sb is not None:
+        sb.table("users").insert({"username": username, "password": password}).execute()
+    else:
+        dfu = load_users_df()
+        dfu = pd.concat([dfu, pd.DataFrame([{"username": username, "password": password}])], ignore_index=True)
+        save_df_to_sheet(dfu, "Felhasználók")
+
+def log_action(user: str, action: str, details: str = ""):
+    try:
+        sh = get_gspread_client().open_by_key(GOOGLE_SHEET_ID)
+        try:
+            ws = sh.worksheet("Naplo")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet("Naplo", rows=1000, cols=4)
+            ws.append_row(["Idő", "Felhasználó", "Művelet", "Részletek"])
+        ws.append_row([datetime.now().isoformat(), user, action, details])
+    except Exception:
+        pass
 
 def safe_rerun():
     try: st.experimental_rerun()
@@ -256,6 +296,7 @@ if st.session_state.role=="rider":
                 }
                 bookings_df = pd.concat([bookings_df, pd.DataFrame([new])], ignore_index=True)
                 save_df_to_sheet(bookings_df, "Foglalások")
+                log_action(st.session_state.user, "foglalás", f"{sel_date} {label}")
                 st.success("Foglalás sikeres!"); safe_rerun()
 
             # Örökítés gomb: heti ismétlés a következő évre
@@ -287,6 +328,7 @@ if st.session_state.role=="rider":
                 if new_entries:
                     bookings_df = pd.concat([bookings_df, pd.DataFrame(new_entries)], ignore_index=True)
                     save_df_to_sheet(bookings_df, "Foglalások")
+                    log_action(st.session_state.user, "örökítés", f"{sel_date} {label}")
                     st.success("Örökítés lefuttatva az elkövetkező évre!"); safe_rerun()
 
     # saját foglalások ICS
@@ -320,7 +362,9 @@ if menu=="Foglalások":
             # egyedi sor törlése
             if c1.button("❌ Törlés", key=f"del{idx}"):
                 bookings_df = bookings_df.drop(idx)
-                save_df_to_sheet(bookings_df,"Foglalások"); safe_rerun()
+                save_df_to_sheet(bookings_df,"Foglalások")
+                log_action("admin","foglalás törlése", f"{r['Dátum']} {r['Kezdés']}")
+                safe_rerun()
             # áthelyezés
             if st.session_state.get("edit_idx")!=idx:
                 if c2.button("↻ Áthelyez", key=f"mv{idx}"):
@@ -332,7 +376,9 @@ if menu=="Foglalások":
                 if c2.button("Mentés", key=f"save{idx}"):
                     bookings_df.at[idx,"Kezdés"]=nt.strftime("%H:%M")
                     save_df_to_sheet(bookings_df,"Foglalások")
-                    del st.session_state["edit_idx"]; safe_rerun()
+                    log_action("admin","foglalás módosítása", f"{r['Dátum']} {r['Kezdés']}->{nt.strftime('%H:%M')}")
+                    del st.session_state["edit_idx"]
+                    safe_rerun()
             # Stop ismétlés, ha RepeatGroupID van
             rg = r.get("RepeatGroupID","")
             if rg:
@@ -342,6 +388,7 @@ if menu=="Foglalások":
                         (bookings_df["Dátum"]>=sel_date)
                     )]
                     save_df_to_sheet(bookings_df,"Foglalások")
+                    log_action("admin","ismétlés leállítása", rg)
                     st.success("Ismétlés leállítva innen!"); safe_rerun()
     # teljes ICS export
     ics_all = generate_ics(bookings_df)
@@ -354,8 +401,9 @@ elif menu=="Felhasználók":
     nu  = st.text_input("Új felhasználó")
     npw = st.text_input("Új jelszó", type="password")
     if st.button("Regisztrálás"):
-        dfu = pd.concat([dfu, pd.DataFrame([{"username":nu,"password":npw}])], ignore_index=True)
-        save_df_to_sheet(dfu,"Felhasználók"); st.success("Felhasználó hozzáadva!"); safe_rerun()
+        save_user(nu, npw)
+        log_action("admin", "felhasználó regisztrálása", nu)
+        st.success("Felhasználó hozzáadva!"); safe_rerun()
 
 elif menu=="Statisztika":
     st.write("📊 Foglalások napi bontásban")
@@ -418,6 +466,7 @@ elif menu=="Beállítások":
                 pd.DataFrame([{"Dátum":sel_date,"Kezdes":ov_ls,"HosszPerc":int(ov_ld)}])
             ], ignore_index=True)
             save_df_to_sheet(new_ov,"EbédSzunet")
+            log_action("admin","napi ebédszünet mentése", str(sel_date))
             st.success("Napi ebédszünet mentve."); safe_rerun()
     with col2:
         br = st.number_input(
@@ -430,6 +479,7 @@ elif menu=="Beállítások":
             df = load_settings_df()
             df.loc[df["Key"]=="break_min","Value"]=str(int(br))
             save_settings_df(df)
+            log_action("admin","átnyergelési idő mentése", str(br))
             st.success("Átnyergelési idő mentve."); safe_rerun()
 
     # 6) globális ebédszünet beállítása
@@ -450,6 +500,7 @@ elif menu=="Beállítások":
         df.loc[df["Key"]=="lunch_start","Value"]=glob_ls.strftime("%H:%M")
         df.loc[df["Key"]=="lunch_dur",    "Value"]=str(int(glob_ld))
         save_settings_df(df)
+        log_action("admin","globális ebédszünet mentése", f"{glob_ls}-{glob_ld}")
         st.success("Globális ebédszünet mentve."); safe_rerun()
 
 elif menu=="Naptár":
@@ -469,6 +520,7 @@ elif menu=="Naptár":
                        .drop_duplicates(subset=["Dátum"])\
                        .sort_values("Dátum")
             save_df_to_sheet(merged,"TiltottNapok")
+            log_action("admin","nap tiltása", f"{sb}-{eb}")
             safe_rerun()
 
 # ---- Kijelentkezés ----
