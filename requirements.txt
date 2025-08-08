@@ -5,3 +5,4 @@ google-auth
 openpyxl
 ics
 gspread-dataframe
+supabase
