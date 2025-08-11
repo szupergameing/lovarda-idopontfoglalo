@@ -8,6 +8,23 @@ import altair as alt
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import secrets as pysecrets
 
+
+
+import streamlit as st
+
+
+# Felső vonal eltüntetése
+st.markdown("""
+    <style>
+    [data-testid="stHeader"] {
+        background: none;
+        height: 0px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+
 # --------------------------
 # Alap / theme
 # --------------------------
