@@ -1,29 +1,22 @@
 # app.py
 from datetime import datetime, date, time, timedelta
-import uuid, os, re, hashlib, binascii, json
+import uuid, os, re, hashlib, binascii
 import pandas as pd
 import streamlit as st
 import gspread
 import altair as alt
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import secrets as pysecrets
+import json
 
-
-
-import streamlit as st
-
-
-# Felső vonal eltüntetése
+# --------------------------
+# Felső vonal eltüntetése (Streamlit header)
+# --------------------------
 st.markdown("""
-    <style>
-    [data-testid="stHeader"] {
-        background: none;
-        height: 0px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-
+<style>
+[data-testid="stHeader"]{background:none; height:0px;}
+</style>
+""", unsafe_allow_html=True)
 
 # --------------------------
 # Alap / theme
@@ -41,30 +34,14 @@ st.markdown("""
 .stButton>button, .stTextInput input, .stDateInput input, .stNumberInput input, .stTimeInput input, .stSelectbox div div {
   background:#1e1e1e!important; color:var(--fg)!important; border:1px solid var(--border)!important;
 }
-
-/* action gombok színezése */
 div.stButton:has(button:contains("Foglal")) > button { background:var(--ok)!important; border:1px solid #245a2f!important; }
 div.stButton:has(button:contains("Foglal")) > button:hover { background:var(--ok2)!important; }
 div.stButton:has(button:contains("Lemond")) > button,
 div.stButton:has(button:contains("❌")) > button { background:var(--danger)!important; border:1px solid #5f1414!important; }
 div.stButton:has(button:contains("Lemond")) > button:hover,
 div.stButton:has(button:contains("❌")) > button:hover { background:var(--danger2)!important; }
-
 .metric { padding:.6rem .8rem; background:#1b1b1b; border:1px solid #2a2a2a; border-radius:.5rem; }
 .center-card { max-width:560px; margin: 10vh auto; padding: 1.5rem; background:#1b1b1b; border:1px solid #2a2a2a; border-radius:.6rem; text-align:center;}
-
-/* --- új: könnyebb lovas UI elemek --- */
-.slot-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px,1fr)); gap:.6rem; }
-.card { padding:.9rem 1rem; background:#1b1b1b; border:1px solid #2a2a2a; border-radius:.6rem; margin-bottom:.6rem; }
-.card h4{ margin:.2rem 0 .6rem 0; }
-.badge { display:inline-block; padding:.2rem .55rem; border:1px solid #2a2a2a; border-radius:.4rem; font-size:.85rem; color:#bdbdbd; }
-
-/* --- Role választó kártyák --- */
-.role-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:1rem; margin-top:1rem;}
-.role-card { padding:1.1rem; border:1px solid #2a2a2a; background:#1b1b1b; border-radius:.8rem; }
-.role-title { font-size:1.15rem; font-weight:700; margin-bottom:.4rem; display:flex; align-items:center; gap:.5rem;}
-.role-desc { color:#bdbdbd; font-size:.95rem; margin-bottom:.8rem;}
-.role-card .stButton>button{ width:100%; padding:.7rem 1rem; border-radius:.6rem;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,9 +67,34 @@ def price_for_minutes(minutes: int) -> int:
     m = int(minutes)
     if m <= 30: return PRICE_30
     if m == 60: return PRICE_60
-    if m == 90: return PRICE_60 + PRICE_30
+    if m == 90: return PRICE_60 + PRICE_30  # ha régi adat lenne
+    # fallback – arányos becslés
     if m < 60:  return round((m/30) * PRICE_30)
     return round((m/60) * PRICE_60)
+
+# --------------------------
+# Név-kezelő és létszám segédek
+# --------------------------
+def split_by_commas(s: str) -> list[str]:
+    """Vesszővel elválasztott nevek -> tiszta lista (üres darabok kidobva)."""
+    if s is None:
+        return []
+    return [p.strip() for p in str(s).split(",") if str(p).strip()]
+
+def count_people(s: str) -> int:
+    """Hány név van, vesszők alapján?"""
+    return len(split_by_commas(s))
+
+def explode_bookings_commas(df: pd.DataFrame) -> pd.DataFrame:
+    """Foglalások szétbontása úgy, hogy minden lovas külön sor legyen."""
+    if df.empty:
+        return df.copy()
+    tmp = df.copy()
+    tmp["__list"] = tmp["Gyermek(ek) neve"].apply(split_by_commas)
+    tmp = tmp.explode("__list").rename(columns={"__list": "Rider"})
+    tmp["Rider"] = tmp["Rider"].fillna("").astype(str)
+    tmp = tmp[tmp["Rider"] != ""]
+    return tmp
 
 # --------------------------
 # Helpers – password hash
@@ -146,7 +148,7 @@ def get_gspread_client():
     # Elsődlegesen a st.secrets-ben kapott service account-ot használjuk
     if GCP_SA:
         return gspread.service_account_from_dict(GCP_SA)
-    # Fallback: JSON fájlból
+    # Fallback: JSON fájlból (ha valamiért így futtatod)
     with open("mystic-fountain-300911-9b2c042063fa.json", "r") as f:
         creds = json.load(f)
     return gspread.service_account_from_dict(creds)
@@ -161,6 +163,10 @@ def load_bookings_df():
     df = get_as_dataframe(ws, evaluate_formulas=True).dropna(how="all").fillna("")
     if "Dátum" in df.columns and len(df): df["Dátum"]=pd.to_datetime(df["Dátum"]).dt.date
     if "Ismétlődik" in df.columns: df["Ismétlődik"]=df["Ismétlődik"].astype(str).str.lower().isin(["true","1","igen","y","yes"])
+    # Fő normalizálása
+    if "Fő" not in df.columns:
+        df["Fő"] = 1
+    df["Fő"] = pd.to_numeric(df["Fő"], errors="coerce").fillna(1).astype(int)
     return df
 
 @st.cache_data(ttl=60)
@@ -214,12 +220,14 @@ def load_lunch_overrides_df():
 
 @st.cache_data(ttl=60)
 def load_events_df():
+    """Foglalás/lemondás/áthelyezés események naplója."""
     sh = get_gspread_client().open_by_key(GOOGLE_SHEET_ID)
     try: ws = sh.worksheet("Események")
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet("Események", rows=2000, cols=12)
         ws.append_row(["Idő","Típus","Felhasználó","Dátum","Kezdés","Időtartam (perc)","Nevek","Megjegyzés","RepeatGroupID","Admin?"])
     df = get_as_dataframe(ws, evaluate_formulas=True).dropna(how="all").fillna("")
+    # normalizálás
     if "Idő" in df.columns and len(df):
         try: df["Idő"] = pd.to_datetime(df["Idő"])
         except: pass
@@ -295,33 +303,18 @@ if st.query_params.get("page") == "done":
 # --------------------------
 st.title("🐴 Lovarda Időpontfoglaló")
 
-# --- szebb kezdő nézet a szerephez
 if st.session_state.role is None:
-    st.markdown("<div class='role-grid'>", unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("<div class='role-card'>"
-                    "<div class='role-title'>🐴 Lovas</div>"
-                    "<div class='role-desc'>Időpont foglalása és saját foglalások kezelése.</div>",
-                    unsafe_allow_html=True)
-        if st.button("Belépek lovasként", key="btn_rider"):
+    # kicsit látványosabb role selector
+    c = st.columns(2)
+    with c[0]:
+        st.markdown("#### Lovas")
+        if st.button("🏇 Belépés lovasként", use_container_width=True):
             st.session_state.role="rider"
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("<div class='role-card'>"
-                    "<div class='role-title'>🛠️ Admin</div>"
-                    "<div class='role-desc'>Foglalások kezelése, beállítások, jelentések.</div>",
-                    unsafe_allow_html=True)
-        if st.button("Belépek adminként", key="btn_admin"):
+    with c[1]:
+        st.markdown("#### Admin")
+        if st.button("🛠️ Belépés adminként", use_container_width=True):
             st.session_state.role="admin"
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
+    if st.session_state.role is None: st.stop()
 
 def _rider_login_submit():
     dfu=load_users_df(); u=st.session_state.get("u_rider","").strip(); p=st.session_state.get("p_rider","")
@@ -338,7 +331,7 @@ def _admin_login_submit():
 if not st.session_state.auth:
     if st.session_state.role=="rider":
         st.subheader("Lovas bejelentkezés")
-        with st.form("rider_login"):
+        with st.form("rider_login"): 
             st.text_input("Felhasználónév", key="u_rider")
             st.text_input("Jelszó", type="password", key="p_rider")
             st.form_submit_button("Bejelentkezés", on_click=_rider_login_submit)
@@ -395,145 +388,130 @@ def get_free_slots(sel_date: date, duration: int):
     return slots
 
 # --------------------------
-# Rider nézet – SZÜLŐ-BARÁT
+# Rider nézet
 # --------------------------
 if st.session_state.role=="rider":
     st.subheader(f"Üdv, {st.session_state.user}!")
     tab_new, tab_mine = st.tabs(["🆕 Új foglalás", "📂 Saját foglalások"])
 
-    # ÚJ FOGLALÁS
     with tab_new:
-        st.markdown("**1. lépés – Válassz dátumot**")
-        d_new = st.date_input("Dátum", value=sel_date, key="new_date")
+        names = st.text_input("Gyermek(ek) neve(i), vesszővel elválasztva", value=st.session_state.user)
+        st.caption("Tipp: több nevet VESSZŐVEL válassz el: pl. \"Kiss Ádám, Nagy Feri\".")
+        # csak 30 vagy 60 perc
+        dur = st.selectbox("Időtartam (perc)", [30,60], index=1)
+        c1,c2 = st.columns(2)
+        with c1: weekly = st.checkbox("Heti ismétlés", value=False)
+        with c2: repeat_until = st.date_input("Ismétlés vége", value=sel_date+timedelta(days=180), disabled=not weekly)
 
-        st.markdown("**2. lépés – Időtartam**")
-        # fallback, mert segmented_control nem minden verzióban érhető el
-        dur = st.radio("", [30,60], horizontal=True, index=1, key="dur_radio")
-        coln1, coln2 = st.columns([2,1])
-        with coln1:
-            names = st.text_input("Gyermek(ek) neve (vesszővel elválasztva)", value=st.session_state.user)
-        with coln2:
-            weekly = st.checkbox("Heti ismétlés", value=False)
-            repeat_until = st.date_input("Ismétlés vége", value=d_new+timedelta(days=180), disabled=not weekly)
-
-        st.markdown("**3. lépés – Válassz idősávot**")
-        avail = get_free_slots(d_new, int(dur))
-        if not avail:
-            st.info("Erre a napra nincs szabad idősáv.")
+        free = get_free_slots(sel_date, int(dur))
+        if not free: st.info("Nincs szabad időpont erre a napra.")
         else:
-            st.markdown("<div class='slot-grid'>", unsafe_allow_html=True)
-            for i, (s,e) in enumerate(avail):
-                label = f"{s.strftime('%H:%M')} – {e.strftime('%H:%M')}"
-                if st.button(label, key=f"slot_{i}"):
+            st.write("**Szabad idősávok:**")
+            for i,(s,e) in enumerate(free):
+                colA,colB = st.columns(2)
+                label=f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')}"
+                if colA.button(f"Foglal {label}", key=f"book_{i}"):
                     if not weekly:
-                        new = {"Dátum": d_new, "Gyermek(ek) neve": names.strip(), "Lovak":"",
-                               "Kezdés": s.strftime("%H:%M"), "Időtartam (perc)": int(dur), "Fő": 1,
-                               "Ismétlődik": False, "RepeatGroupID": "", "Megjegyzés": ""}
+                        new = {"Dátum":sel_date,"Gyermek(ek) neve":names.strip(),"Lovak":"",
+                               "Kezdés":s.strftime("%H:%M"),"Időtartam (perc)":int(dur),
+                               "Fő": max(1, count_people(names)),
+                               "Ismétlődik":False,"RepeatGroupID":"","Megjegyzés":""}
                         new_df = pd.concat([bookings_df, pd.DataFrame([new])], ignore_index=True)
                         save_df_to_sheet(new_df, "Foglalások")
-                        log_event("foglalás", st.session_state.user, d_new, s, int(dur), names.strip(), "", "", False)
+                        log_event("foglalás", st.session_state.user, sel_date, s, int(dur), names.strip(), "", "", False)
                         goto_done("Foglalás sikeres!")
                     else:
-                        group_id = f"rep_{uuid.uuid4()}"
-                        future = pd.date_range(start=d_new, end=repeat_until, freq="7D").date
+                        group_id=f"rep_{uuid.uuid4()}"
+                        future=pd.date_range(start=sel_date, end=repeat_until, freq='7D').date
                         blocked_days=set(blocked["Dátum"].tolist()) if "Dátum" in blocked.columns else set()
-                        entries, conflicts = [], []
+                        entries,conflicts=[],[]
                         for d in future:
                             if d in blocked_days: continue
-                            if ((bookings_df["Dátum"]==d) & (bookings_df["Kezdés"]==s.strftime("%H:%M"))).any():
+                            if ((bookings_df["Dátum"]==d)&(bookings_df["Kezdés"]==s.strftime("%H:%M"))).any():
                                 conflicts.append(d); continue
-                            entries.append({"Dátum": d, "Gyermek(ek) neve": names.strip(), "Lovak":"",
-                                            "Kezdés": s.strftime("%H:%M"), "Időtartam (perc)": int(dur), "Fő": 1,
-                                            "Ismétlődik": True, "RepeatGroupID": group_id, "Megjegyzés": "heti ismétlés"})
-                        if conflicts:
-                            st.warning("Ütköző napok kihagyva: " + ", ".join(map(str, conflicts)))
+                            entries.append({"Dátum":d,"Gyermek(ek) neve":names.strip(),"Lovak":"",
+                                            "Kezdés":s.strftime("%H:%M"),"Időtartam (perc)":int(dur),
+                                            "Fő": max(1, count_people(names)),
+                                            "Ismétlődik":True,"RepeatGroupID":group_id,"Megjegyzés":"heti ismétlés"})
+                        if conflicts: st.warning("Ütköző napok kihagyva: "+", ".join(map(str,conflicts)))
                         if entries:
-                            new_df = pd.concat([bookings_df, pd.DataFrame(entries)], ignore_index=True)
-                            save_df_to_sheet(new_df, "Foglalások")
-                            log_event("sorozat_foglalás", st.session_state.user, d_new, s, int(dur), names.strip(), f"{len(entries)} alkalom", group_id, False)
+                            new_df=pd.concat([bookings_df,pd.DataFrame(entries)], ignore_index=True)
+                            save_df_to_sheet(new_df,"Foglalások")
+                            log_event("sorozat_foglalás", st.session_state.user, sel_date, s, int(dur), names.strip(), f"{len(entries)} alkalom", group_id, False)
                             goto_done("Ismétlődő foglalás létrehozva.")
                         else:
                             st.info("Nem volt hozzáadható időpont az ismétléshez.")
-            st.markdown("</div>", unsafe_allow_html=True)
 
-    # SAJÁT FOGLALÁSOK
     with tab_mine:
-        st.markdown("### Következő foglalásaid")
-        mine = bookings_df.copy()
-        mine = mine[mine["Gyermek(ek) neve"].astype(str).str.contains(st.session_state.user, case=False, na=False)]
-        now = date.today()
-        mine = mine[mine["Dátum"] >= now].sort_values(["Dátum","Kezdés"])
-        upcoming = mine[mine["Dátum"] <= now + timedelta(days=60)]
-
-        if upcoming.empty:
-            st.info("Nincs közelgő foglalásod.")
+        mask = bookings_df.get("Gyermek(ek) neve","").astype(str).str.contains(st.session_state.user, case=False, na=False)
+        my_df = bookings_df[mask].copy().sort_values(["Dátum","Kezdés"])
+        st.markdown("### Saját foglalásaim")
+        if my_df.empty: st.info("Még nincsenek foglalásaid.")
         else:
-            for d, grp in upcoming.groupby("Dátum"):
-                st.markdown(f"<div class='card'><h4>{d.strftime('%Y.%m.%d')} <span class='badge'>{len(grp)} foglalás</span></h4>", unsafe_allow_html=True)
-                for idx, r in grp.iterrows():
-                    tm = str(r['Kezdés'])
-                    durv = int(r['Időtartam (perc)'])
-                    cols = st.columns([3,2,2,2,2])
-                    with cols[0]: st.write(f"**{tm}**  •  {r['Gyermek(ek) neve']}")
-                    with cols[1]: st.write(f"{durv} perc")
-                    with cols[2]: st.write("Ismétlődik" if bool(r.get("Ismétlődik", False)) else "Egyedi")
-                    with cols[3]: st.write(str(r.get("Megjegyzés","")).strip() or "—")
-                    with cols[4]:
-                        if st.button("Lemondás", key=f"del_{idx}"):
-                            if datetime.combine(d, _to_time_safe(r["Kezdés"])) < datetime.now():
-                                st.error("Múltbeli foglalás nem mondható le.")
-                            else:
-                                log_event("lemondás", st.session_state.user, d, _to_time_safe(r["Kezdés"]), durv, str(r["Gyermek(ek) neve"]), "", str(r.get("RepeatGroupID","")), False)
-                                new_df = bookings_df.drop(index=idx)
-                                save_df_to_sheet(new_df, "Foglalások")
-                                goto_done("Foglalás lemondva.")
-                st.markdown("</div>", unsafe_allow_html=True)
+            c1,c2,c3 = st.columns(3)
+            with c1: from_d = st.date_input("Dátum -tól", value=date.today())
+            with c2: to_d   = st.date_input("Dátum -ig",  value=date.today()+timedelta(days=60))
+            with c3: time_start = st.time_input("Napszak -tól", value=time(0,0))
+            my_df = my_df[(my_df["Dátum"]>=from_d)&(my_df["Dátum"]<=to_d)]
+            my_df["Kezdés_time"]=my_df["Kezdés"].apply(_to_time_safe)
+            my_df = my_df[my_df["Kezdés_time"]>=time_start]
+            st.dataframe(my_df[["Dátum","Kezdés","Időtartam (perc)","Gyermek(ek) neve","Fő","Ismétlődik","RepeatGroupID","Megjegyzés"]],
+                         use_container_width=True)
 
-        st.markdown("---")
-        st.markdown("### Ismétlődő foglalások (nyaralás / szünet)")
-        rep_df = bookings_df.copy()
-        rep_df = rep_df[(rep_df["Gyermek(ek) neve"].astype(str).str.contains(st.session_state.user, case=False, na=False)) & (rep_df["Ismétlődik"]==True)]
-        rep_df = rep_df[rep_df["Dátum"]>=now]
-        if rep_df.empty:
-            st.info("Nincs ismétlődő foglalásod.")
-        else:
-            groups = sorted([g for g in rep_df["RepeatGroupID"].unique() if g])
-            gsel = st.selectbox("Válassz egy sorozatot", options=groups, key="rep_pick")
-            if gsel:
-                gdata = bookings_df[(bookings_df["RepeatGroupID"]==gsel) & (bookings_df["Dátum"]>=now)].sort_values(["Dátum","Kezdés"])
-                st.caption("Sorozat jövőbeli alkalmai:")
-                st.dataframe(gdata[["Dátum","Kezdés","Időtartam (perc)","Megjegyzés"]], use_container_width=True, height=220)
+            st.markdown("---")
+            st.write("**Foglalás lemondása (egyedi)**")
+            col1,col2,col3 = st.columns([1,1,2])
+            with col1: sel_idx = st.selectbox("Válassz (index)", options=list(my_df.index))
+            with col3: reason = st.text_input("Indok (opcionális)", value="")
+            with col2:
+                if st.button("Lemondás"):
+                    row=bookings_df.loc[sel_idx]; dt=row["Dátum"]; tm=_to_time_safe(row["Kezdés"])
+                    if datetime.combine(dt, tm) < datetime.now(): st.error("Múltbeli foglalás nem mondható le.")
+                    else:
+                        log_event("lemondás", st.session_state.user, dt, tm, int(row["Időtartam (perc)"]), str(row["Gyermek(ek) neve"]), reason, str(row.get("RepeatGroupID","")), False)
+                        new_df=bookings_df.drop(index=sel_idx)
+                        save_df_to_sheet(new_df,"Foglalások")
+                        goto_done("Foglalás lemondva.")
 
-                dates = gdata["Dátum"].tolist()
-                c1, c2, c3 = st.columns([2,1,1])
-                with c1:
-                    skip_date = st.selectbox("Melyik napot hagyjuk ki?", options=dates, format_func=str)
-                with c2:
-                    if st.button("Kihagyás", key="skip_one"):
-                        to_drop = bookings_df[(bookings_df["RepeatGroupID"]==gsel) & (bookings_df["Dátum"]==skip_date)]
+            st.markdown("### Ismétlődő foglalások kezelése (nyaralás/szünet)")
+            rep_df = my_df[my_df["Ismétlődik"]==True].copy()
+            if rep_df.empty: st.info("Nincs ismétlődő foglalásod.")
+            else:
+                groups = sorted([g for g in rep_df["RepeatGroupID"].unique() if g])
+                gsel = st.selectbox("Válassz sorozatot (RepeatGroupID)", options=groups)
+                gdata = rep_df[rep_df["RepeatGroupID"]==gsel].sort_values(["Dátum","Kezdés"])
+                st.dataframe(gdata[["Dátum","Kezdés","Időtartam (perc)","Megjegyzés"]], use_container_width=True)
+
+                opt_dates = gdata["Dátum"].tolist()
+                csk1,csk2 = st.columns([2,1])
+                with csk1: skip_date = st.selectbox("Alkalom kihagyása (csak egy nap szabadul fel)", options=opt_dates, format_func=str)
+                with csk2:
+                    if st.button("Kihagyás ezen a napon"):
+                        to_drop = bookings_df[(bookings_df["RepeatGroupID"]==gsel)&(bookings_df["Dátum"]==skip_date)]
                         if not to_drop.empty:
                             row = to_drop.iloc[0]
                             log_event("sorozat_alkalom_kihagyás", st.session_state.user, skip_date, _to_time_safe(row["Kezdés"]), int(row["Időtartam (perc)"]), str(row["Gyermek(ek) neve"]), "nyaralás/egyedi kihagyás", gsel, False)
                             new_df = bookings_df.drop(index=to_drop.index)
-                            save_df_to_sheet(new_df, "Foglalások")
+                            save_df_to_sheet(new_df,"Foglalások")
                             goto_done(f"{skip_date} kihagyva a sorozatból.")
-                        else:
-                            st.info("Nem találtam ilyen előfordulást.")
-                with c3:
-                    start_skip = st.date_input("Szünet kezdete", value=now)
-                    weeks = st.number_input("Hány hét?", 1, 12, 2)
-                    if st.button("Szüneteltetem", key="pause_series"):
+                        else: st.info("Nem találtam ilyen előfordulást.")
+
+                csk3,csk4,csk5 = st.columns([2,1,1])
+                with csk3: start_skip = st.date_input("Szünet kezdete", value=date.today())
+                with csk4: weeks = st.number_input("Hány hét", 1, 12, 2)
+                with csk5:
+                    if st.button("Sorozat szüneteltetése"):
                         end_skip = start_skip + timedelta(days=7*weeks)
-                        to_drop = bookings_df[(bookings_df["RepeatGroupID"]==gsel) & (bookings_df["Dátum"]>=start_skip) & (bookings_df["Dátum"]<end_skip)]
+                        to_drop = bookings_df[(bookings_df["RepeatGroupID"]==gsel)&(bookings_df["Dátum"]>=start_skip)&(bookings_df["Dátum"]<end_skip)]
                         if not to_drop.empty:
                             log_event("sorozat_szünet", st.session_state.user, start_skip, None, None, "", f"{weeks} hét", gsel, False)
-                            new_df = bookings_df.drop(index=to_drop.index)
-                            save_df_to_sheet(new_df, "Foglalások")
-                            goto_done(f"Szünet beállítva {start_skip} – {(end_skip - timedelta(days=1))}.")
-                        else:
-                            st.info("Erre az időszakra nincs előfordulás.")
+                            new_df=bookings_df.drop(index=to_drop.index)
+                            save_df_to_sheet(new_df,"Foglalások")
+                            goto_done(f"Szünet beállítva {start_skip} – {end_skip - timedelta(days=1)} között.")
+                        else: st.info("Erre az időszakra nincs előfordulás.")
 
-        if not bookings_df.empty and not mine.empty:
+        mine = bookings_df[mask]
+        if not mine.empty:
             st.download_button("ICS export (saját)", data=generate_ics(mine), file_name="sajat_foglalasok.ics", mime="text/calendar")
 
     st.markdown("---")
@@ -560,7 +538,9 @@ def bookings_minutes_on(d: date) -> int:
 def bookings_revenue_on(d: date) -> int:
     df = bookings_df[bookings_df["Dátum"]==d]
     if df.empty: return 0
-    return int(df["Időtartam (perc)"].astype(int).apply(price_for_minutes).sum())
+    per_head = df["Időtartam (perc)"].astype(int).apply(price_for_minutes)
+    heads = pd.to_numeric(df.get("Fő", 1), errors="coerce").fillna(1).astype(int)
+    return int((per_head * heads).sum())
 
 if menu=="Foglalások":
     st.markdown("### Heti foglalások (kezelés)")
@@ -569,7 +549,7 @@ if menu=="Foglalások":
     if wdf.empty: st.info("Nincs foglalás ezen a héten.")
     else:
         for idx,r in wdf.iterrows():
-            st.write(f"**{r['Dátum']} {r['Kezdés']}** – {r['Gyermek(ek) neve']} ({r['Időtartam (perc)']}p) | RG: {r.get('RepeatGroupID','')}")
+            st.write(f"**{r['Dátum']} {r['Kezdés']}** – {r['Gyermek(ek) neve']} ({r['Időtartam (perc)']}p, Fő: {r.get('Fő',1)}) | RG: {r.get('RepeatGroupID','')}")
             c1,c2,c3 = st.columns(3)
 
             if c1.button("❌ Törlés", key=f"del{idx}"):
@@ -577,16 +557,28 @@ if menu=="Foglalások":
                 new_df=bookings_df.drop(idx); save_df_to_sheet(new_df,"Foglalások"); st.rerun()
 
             if st.session_state.get("edit_idx")!=idx:
-                if c2.button("↻ Áthelyez", key=f"mv{idx}"):
+                if c2.button("↻ Szerkeszt", key=f"mv{idx}"):
                     st.session_state["edit_idx"]=idx
                     st.session_state["new_time"]=_to_time_safe(r["Kezdés"])
+                    st.session_state["new_names"]=str(r["Gyermek(ek) neve"])
+                    st.session_state["new_dur"]=int(r["Időtartam (perc)"])
                     st.rerun()
             else:
-                nt = c2.time_input("Új kezdés", value=_to_time_safe(st.session_state.get("new_time", r["Kezdés"])), key=f"time{idx}")
-                if c2.button("Mentés", key=f"save{idx}"):
+                nt   = c2.time_input("Új kezdés", value=_to_time_safe(st.session_state.get("new_time", r["Kezdés"])), key=f"time{idx}")
+                ndur = c2.number_input("Időtartam (perc)", min_value=5, max_value=240, step=5, value=int(st.session_state.get("new_dur", r["Időtartam (perc)"])), key=f"dur{idx}")
+                nms  = c3.text_input("Gyermek(ek) neve (vesszőkkel)", value=st.session_state.get("new_names", str(r["Gyermek(ek) neve"])), key=f"names{idx}")
+
+                save_col, cancel_col = st.columns(2)
+                if save_col.button("Mentés", key=f"save{idx}"):
                     bookings_df.at[idx,"Kezdés"]=nt.strftime("%H:%M")
+                    bookings_df.at[idx,"Időtartam (perc)"]=int(ndur)
+                    bookings_df.at[idx,"Gyermek(ek) neve"]=nms.strip()
+                    bookings_df.at[idx,"Fő"]=max(1, count_people(nms))
                     save_df_to_sheet(bookings_df,"Foglalások")
-                    log_event("admin_áthelyezés", "admin", r["Dátum"], nt, int(r["Időtartam (perc)"]), str(r["Gyermek(ek) neve"]), "", str(r.get("RepeatGroupID","")), True)
+                    log_event("admin_módosítás", "admin", r["Dátum"], nt, int(ndur), nms.strip(), "", str(r.get("RepeatGroupID","")), True)
+                    st.session_state.pop("edit_idx",None); st.rerun()
+
+                if cancel_col.button("Mégse", key=f"cancel{idx}"):
                     st.session_state.pop("edit_idx",None); st.rerun()
 
             rg = r.get("RepeatGroupID","")
@@ -596,6 +588,7 @@ if menu=="Foglalások":
                 log_event("admin_stop_sorozat", "admin", sel_date, None, None, "", "", rg, True)
                 st.success("Ismétlés leállítva innen!"); st.rerun()
 
+    # napi bevétel táblázat a hétre
     wk_days = [sel_date + timedelta(days=i) for i in range(7)]
     rev_rows = [{"Dátum":d, "Bevétel (Ft)": bookings_revenue_on(d)} for d in wk_days]
     rev_df = pd.DataFrame(rev_rows)
@@ -609,6 +602,7 @@ elif menu=="Áttekintés (heti)":
     st.markdown("### Heti áttekintő — telítettség, bevétel, rács, top lovasok")
     week_num=sel_date.isocalendar()[1]
     week_df=bookings_df[bookings_df["Dátum"].apply(lambda d:d.isocalendar()[1])==week_num].copy()
+    week_ex = explode_bookings_commas(week_df)
 
     wk_days = [sel_date + timedelta(days=i) for i in range(7)]
     daily_rev = pd.DataFrame({
@@ -622,7 +616,7 @@ elif menu=="Áttekintés (heti)":
     total_bookings=len(week_df)
     total_minutes=int(week_df["Időtartam (perc)"].astype(int).sum()) if not week_df.empty else 0
     total_revenue=int(daily_rev["Bevétel (Ft)"].sum())
-    unique_riders=week_df["Gyermek(ek) neve"].nunique() if not week_df.empty else 0
+    unique_riders=week_ex["Rider"].nunique() if not week_ex.empty else 0
     with c1: st.markdown(f"<div class='metric'><b>Foglalások (hét)</b><br>{total_bookings}</div>", unsafe_allow_html=True)
     with c2: st.markdown(f"<div class='metric'><b>Össz. perc</b><br>{total_minutes} p</div>", unsafe_allow_html=True)
     with c3: st.markdown(f"<div class='metric'><b>Heti bevétel</b><br>{total_revenue:,} Ft</div>".replace(",", " "), unsafe_allow_html=True)
@@ -636,18 +630,20 @@ elif menu=="Áttekintés (heti)":
 
     st.markdown("#### Heti naptár (rács)")
     if not week_df.empty:
-        timeline = week_df.copy()
+        timeline=week_df.copy()
         timeline["start"] = pd.to_datetime(timeline["Dátum"].astype(str) + " " + timeline["Kezdés"].astype(str), errors="coerce")
         timeline["Időtartam (perc)"] = pd.to_numeric(timeline["Időtartam (perc)"], errors="coerce").fillna(0).astype(int)
         timeline["end"] = timeline["start"] + pd.to_timedelta(timeline["Időtartam (perc)"], unit="m")
-        timeline["Nap"] = timeline["Dátum"].astype(str)
+        timeline["Nap"]=timeline["Dátum"].astype(str)
 
-        ch = (alt.Chart(timeline.dropna(subset=["start","end"])).mark_bar().encode(
-                y=alt.Y('Nap:N', sort=sorted(timeline["Nap"].unique())),
-                x='start:T', x2='end:T',
-                color=alt.Color('Gyermek(ek) neve:N', legend=None),
-                tooltip=['Gyermek(ek) neve','Nap','start:T','end:T']
-            ).properties(height=220))
+        ch=(alt.Chart(timeline.dropna(subset=["start", "end"]))
+                .mark_bar()
+                .encode(
+                    y=alt.Y('Nap:N', sort=sorted(timeline["Nap"].unique())),
+                    x='start:T', x2='end:T',
+                    color=alt.Color('Gyermek(ek) neve:N', legend=None),
+                    tooltip=['Gyermek(ek) neve','Nap','start:T','end:T']
+                ).properties(height=220))
         st.altair_chart(ch, use_container_width=True)
 
         grid = (timeline.dropna(subset=["start"])
@@ -658,9 +654,19 @@ elif menu=="Áttekintés (heti)":
         st.info("Nincs foglalás ezen a héten.")
 
     st.markdown("#### Top foglalók (perc / hét)")
-    if not week_df.empty:
-        top=(week_df.groupby("Gyermek(ek) neve")["Időtartam (perc)"].sum().sort_values(ascending=False).reset_index())
-        st.dataframe(top, use_container_width=True)
+    if not week_ex.empty:
+        top_minutes = (week_ex.groupby("Rider")["Időtartam (perc)"].sum()
+                               .sort_values(ascending=False)
+                               .reset_index()
+                               .rename(columns={"Rider":"Lovas","Időtartam (perc)":"Perc (össz.)"}))
+        top_sessions = (week_ex.groupby("Rider").size()
+                               .reset_index(name="Alkalmak")
+                               .sort_values("Alkalmak", ascending=False)
+                               .rename(columns={"Rider":"Lovas"}))
+        st.markdown("**Top lovasok – össz. perc**")
+        st.dataframe(top_minutes, use_container_width=True)
+        st.markdown("**Top lovasok – alkalmak száma**")
+        st.dataframe(top_sessions, use_container_width=True)
 
 elif menu=="Események":
     st.markdown("### Foglalási események (foglalás / lemondás / áthelyezés)")
@@ -671,7 +677,7 @@ elif menu=="Események":
         c1,c2,c3 = st.columns(3)
         with c1: d_from = st.date_input("Dátum -tól", value=date.today()-timedelta(days=30))
         with c2: d_to   = st.date_input("Dátum -ig", value=date.today()+timedelta(days=1))
-        with c3: etype  = st.selectbox("Típus", ["(mind)","foglalás","sorozat_foglalás","lemondás","sorozat_alkalom_kihagyás","sorozat_szünet","admin_törlés","admin_áthelyezés","admin_stop_sorozat"])
+        with c3: etype  = st.selectbox("Típus", ["(mind)","foglalás","sorozat_foglalás","lemondás","sorozat_alkalom_kihagyás","sorozat_szünet","admin_törlés","admin_áthelyezés","admin_stop_sorozat","admin_módosítás"])
         ev2 = ev.copy()
         try:
             ev2["Idő_dt"] = pd.to_datetime(ev2["Idő"])
@@ -752,6 +758,7 @@ elif menu=="Naptár":
     st.header("📅 Tiltott napok — egyszerű kezelés")
     bd = load_blocked_df()
 
+    # Egy nap gyors tiltása / feloldása
     c1,c2,c3 = st.columns([2,1,1])
     with c1: one = st.date_input("Nap", value=date.today(), key="one_day")
     with c2:
@@ -764,6 +771,7 @@ elif menu=="Naptár":
             new_df = bd[bd["Dátum"]!=one]; save_df_to_sheet(new_df,"TiltottNapok"); st.success(f"{one} feloldva."); st.rerun()
 
     st.markdown("---")
+    # Tartomány tiltása (egy widget)
     rng = st.date_input("Tartomány (kezdő & záró nap)", value=(date.today(), date.today()))
     if isinstance(rng, tuple) and len(rng)==2:
         a,b=rng
@@ -776,6 +784,7 @@ elif menu=="Naptár":
                 save_df_to_sheet(new_df,"TiltottNapok"); st.success(f"Tiltva: {a} – {b}."); st.rerun()
 
     st.markdown("---")
+    # Tömeges kijelölés (következő 90 nap)
     st.markdown("**Több nap kijelölése (következő 90 nap)**")
     future_days = list(pd.date_range(date.today(), date.today()+timedelta(days=90)).date)
     multi = st.multiselect("Napok", options=future_days, format_func=lambda d:d.strftime("%Y-%m-%d"))
